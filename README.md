@@ -1,6 +1,8 @@
 # Toy Training and Inference Engine (TTIE)
 
-Совестный проект [курса в МФТИ](https://ckorikov.github.io/2025-spring-efficient-ai/) по методам эффективной реализации моделей искусственного интеллекта.
+[![Build & Test](https://github.com/ckorikov/2025-ttie/actions/workflows/cmake-single-platform.yml/badge.svg)](https://github.com/ckorikov/2025-ttie/actions/workflows/cmake-single-platform.yml)
+
+Совместный проект [курса в МФТИ](https://ckorikov.github.io/2025-spring-efficient-ai/) по методам эффективной реализации моделей искусственного интеллекта.
 
 
 Цель проекта — реализовать библиотеку для обучения и инференса нейронной сети на CPU, GPU, NPU.
