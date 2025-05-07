@@ -8,6 +8,16 @@ TEST(TensorTest, UninitializedTensor) {
     EXPECT_TRUE(x.empty());
 }
 
+TEST(TensorTest, BasicOps) {
+    Tensor a(std::vector<float>({1, 2, 3, 4}));
+    Tensor b(std::vector<float>({1, 2, 3, 4}));
+    a.reshape({1, 2, 2});
+    b.reshape({2, 1, 2});
+
+    std::cout << a + b;
+}
+
+#if 0
 TEST(TensorTest, DISABLED_ValidateShape) {
     Tensor t;
     t.shape = {2, 3};
@@ -347,6 +357,7 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     ASSERT_EQ(layer2->bias.grad.size(), 1);
     EXPECT_NEAR(layer2->bias.grad[0], 2.0000f, 1e-4f);
 }
+#endif
 
 
 int main(int argc, char **argv) {
