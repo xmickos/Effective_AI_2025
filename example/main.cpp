@@ -13,12 +13,14 @@ int main()
     a.reshape({1, 2, 2});
     b.reshape({1, 2, 2});
 
-    Tensor c = a + b;
+    Tensor c = a + (b + a);
 
-    std::cout << c << std::endl;
+    std::cout << "c:" << std::endl;
     c.backward();
+    std::cout << "backwarded" << std::endl;
+    std::cout << a << std::endl;
+    std::cout << b << std::endl;
     std::cout << c << std::endl;
-    c.zero_grad();
-    std::cout << c << std::endl;
+    std::for_each(b.get_grad().begin(), b.get_grad().end(), [](float t){ std::cout << t << " "; });
     return 0;
 }

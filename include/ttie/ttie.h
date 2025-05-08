@@ -10,8 +10,15 @@
 
 namespace ttie {
 
-    struct GradFn;
     class Tensor;
+    struct TensorImpl;
+    struct GradFn {
+        std::vector<std::shared_ptr<TensorImpl>> inputs;
+
+        GradFn(const std::initializer_list<std::shared_ptr<TensorImpl>> lst_) : inputs(lst_) {}
+        virtual void backward(TensorImpl& output) = 0; // TensorImpl -> Tensor?
+        virtual std::string typestr() const noexcept = 0;
+    };  // GradFn не нужно знать свой истинный тип если backward написан в общем виде?
 
     struct TensorImpl final {
         std::vector<size_t> shape_;
@@ -20,22 +27,27 @@ namespace ttie {
         std::vector<size_t> strides;
         std::shared_ptr<GradFn> grad_fn;
         bool requires_grad = false;
+
+        void backward() { if(grad_fn) { grad_fn->backward(*this); } }
+
+        void accumulate_grad(const std::vector<float> grad_) {
+            if(grad.empty()) {
+                grad.resize(data.size());
+                std::fill(grad.begin(), grad.end(), 1.0f);
+            } else {
+                std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
+            }
+        }
     };
 
-    struct GradFn {
-        GradFn(const std::initializer_list<std::shared_ptr<TensorImpl>> lst_) : inputs(lst_) {}
-        std::vector<std::shared_ptr<TensorImpl>> inputs;
-        virtual void backward(TensorImpl& output) = 0; // TensorImpl -> Tensor?
-    };  // GradFn не нужно знать свой истинный тип если backward написан в общем виде?
+    struct AddOp final : public GradFn {
+        AddOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
 
-    class AddOp final : public GradFn {
-        public:
-            AddOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
-
-            void backward(TensorImpl& output) override { // c = a + b, ∂c/∂a = b, ∂c/∂b = a;
-                inputs[0]->grad = inputs[1]->data;
-                inputs[1]->grad = inputs[0]->data;
-            }
+        void backward(TensorImpl& output) override { // c = a + b, ∂c/∂a = 1, ∂c/∂b = 1;
+            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->accumulate_grad(output.grad); });
+            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->backward(); });
+        }
+        std::string typestr() const noexcept override { return "AddOp"; }
     };
 
     template <typename T>
@@ -65,20 +77,21 @@ namespace ttie {
 
             Tensor(const std::vector<float>& data_, bool requires_grad=false) : impl_(new TensorImpl) {
                 impl_->data = data_;
-                impl_->grad.resize(impl_->data.size());
                 impl_->strides.resize(impl_->data.size());
                 impl_->shape_ = {data_.size()};
             }
 
         private:
 
-            void add_node(const GradFn& node) {}
+            void set_grad(std::shared_ptr<GradFn> node) {
+                impl_->grad_fn = node;
+            }
 
         public:
 
             bool empty() const noexcept { return impl_->data.empty(); }
 
-            void backward() { impl_->grad_fn->backward(*impl_); }
+            void backward() { impl_->backward(); }
 
             void reshape(std::initializer_list<size_t> new_shape) {
                 size_t new_size = std::accumulate(new_shape.begin(), new_shape.end(), 1, std::multiplies<size_t>());
@@ -114,11 +127,11 @@ namespace ttie {
                     throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
                 }
 
-                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::plus<int>());
-                impl_->grad_fn = std::make_shared<AddOp>(impl_, lhs.impl_);
+                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::plus<float>());
                 return *this;
             }
 
+        private:
             size_t compute_index(const std::initializer_list<size_t>& idx) const {
                 if(std::equal(impl_->shape_.begin(), impl_->shape_.end(), idx.begin(),
                     [](size_t a, size_t b){ return a < b; }
@@ -129,6 +142,7 @@ namespace ttie {
                 return std::inner_product(impl_->strides.begin(), impl_->strides.end(), idx.begin(), 0);
             }
 
+        public:
             size_t size() const {
                 if(impl_->data.empty()) { return 0; }
 
@@ -143,36 +157,47 @@ namespace ttie {
 
             const std::vector<float>& get_grad() const noexcept { return impl_->grad; }
 
-        friend std::ostream &operator<<(std::ostream &os, const Tensor &t) {
-            os << "Tensor@" << &t;
+            Tensor operator+(const Tensor& rhs) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
+                tmp += rhs;
+                tmp.set_grad(std::make_shared<AddOp>(impl_, rhs.impl_));
+                std::cout << *this << "\n";
+                std::cout << rhs << "\n";
+                std::cout << tmp << "\n";
+                return tmp;
+            }
 
-            if(t.empty()) {
-                os << "(not initialized)";
+            friend std::ostream &operator<<(std::ostream &os, const Tensor &t) {
+                os << "Tensor@" << &t;
+
+                if(t.empty()) {
+                    os << "(not initialized)";
+                    return os;
+                }
+
+                os << "(shape=" << vector_to_string(t.shape());
+
+                if(!t.empty()) {
+                    os << ", data=" << vector_to_string(t.get_data());
+                } else {
+                    os << ", data=[no data]";
+                }
+
+                if(!t.empty()) {
+                    os << ", grad=" << vector_to_string(t.get_grad());
+                }
+
+                if(t.impl_->grad_fn){
+                    os << ", grad_fn=" << t.impl_->grad_fn->typestr();
+                } else {
+                    os << ", grad_fn=nullptr";
+                }
+
+                os << ")";
                 return os;
             }
-
-            os << "(shape=" << vector_to_string(t.shape());
-
-            if(!t.empty()) {
-                os << ", data=" << vector_to_string(t.get_data());
-            } else {
-                os << ", data=[no data]";
-            }
-
-            if(!t.empty()) {
-                os << ", grad=" << vector_to_string(t.get_grad());
-            }
-
-            os << ")";
-            return os;
-        }
     };
-
-    Tensor operator+(const Tensor& lhs, const Tensor& rhs) {
-        Tensor tmp{lhs};
-        tmp += rhs;
-        return tmp;
-    }
 
     struct Layer {
         virtual void forward(const Tensor &input, Tensor &output) = 0;
