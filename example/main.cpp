@@ -13,7 +13,7 @@ int main()
     a.reshape({1, 2, 2});
     b.reshape({1, 2, 2});
 
-    Tensor c = a * b * b + a; // grad_b = 2ab == {2, 8, 12, 32}
+    Tensor c = -a + b; //
 
     std::cout << "c:" << std::endl;
     c.backward();

@@ -76,9 +76,42 @@ namespace ttie {
 
             inputs[0]->backward();
             inputs[1]->backward();
-            std::cout << "aboba";
         }
         std::string typestr() const noexcept override { return "MulOp"; }
+    };
+
+    struct SubOp final : public GradFn {
+        SubOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+
+        void backward(TensorImpl& output) override { // c = a - b, ∂c/∂a = 1, ∂c/∂b = -1
+            std::vector<float> final_grad_a(output.grad.size(), 1.0f);
+            std::vector<float> final_grad_b(output.grad.size(), -1.0f);
+
+            std::transform(final_grad_a.begin(), final_grad_a.end(), output.grad.begin(), final_grad_a.begin(), std::multiplies<float>());
+            std::transform(final_grad_b.begin(), final_grad_b.end(), output.grad.begin(), final_grad_b.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+        }
+        std::string typestr() const noexcept override { return "SubOp"; }
+    };
+
+    struct UnaryMinusOp final : public GradFn {
+        UnaryMinusOp(const std::shared_ptr<TensorImpl>& a) : GradFn({a}) {}
+
+        void backward(TensorImpl& output) override { // c = -a, ∂c/∂a = -1
+            std::vector<float> final_grad(output.grad.size(), -1.0f);
+
+            std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad);
+
+            inputs[0]->backward();
+        }
+        std::string typestr() const noexcept override { return "UnaryMinusOp"; }
     };
 
     template <typename T>
@@ -162,6 +195,15 @@ namespace ttie {
                 return *this;
             }
 
+            Tensor& operator-=(const Tensor& lhs) {
+                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                }
+
+                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::minus<float>());
+                return *this;
+            }
+
             Tensor& operator*=(const Tensor& lhs) {
                 if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
                     throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
@@ -202,6 +244,22 @@ namespace ttie {
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
                 tmp += rhs;
                 tmp.set_grad(std::make_shared<AddOp>(impl_, rhs.impl_));
+                return tmp;
+            }
+
+            Tensor operator-(const Tensor& rhs) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
+                tmp -= rhs;
+                tmp.set_grad(std::make_shared<SubOp>(impl_, rhs.impl_));
+                return tmp;
+            }
+
+            Tensor operator-() {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
+                std::transform(tmp.impl_->data.begin(), tmp.impl_->data.end(), tmp.impl_->data.begin(), [](float t){ return -t; });
+                tmp.set_grad(std::make_shared<UnaryMinusOp>(impl_));
                 return tmp;
             }
 
