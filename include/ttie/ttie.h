@@ -28,10 +28,23 @@ namespace ttie {
         std::shared_ptr<GradFn> grad_fn;
         bool requires_grad = false;
 
-        void backward() { if(grad_fn) { grad_fn->backward(*this); } }
+        void backward() {
+            if(grad_fn) {
+                if(grad.empty()) {
+                    grad.resize(data.size());
+                    std::fill(grad.begin(), grad.end(), 1.0f);
+                }
+                grad_fn->backward(*this);
+            }
+        }
 
-        void accumulate_grad(const std::vector<float> grad_) {
-            std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
+        void accumulate_grad(const std::vector<float>& grad_) {
+            if(grad.empty()) {
+                grad.resize(data.size());
+                std::copy(grad_.begin(), grad_.end(), grad.begin());
+            } else {
+                std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
+            }
         }
     };
 
@@ -39,8 +52,11 @@ namespace ttie {
         AddOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
 
         void backward(TensorImpl& output) override { // c = a + b, ∂c/∂a = 1, ∂c/∂b = 1;
-            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->accumulate_grad(output.grad); });
-            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->backward(); });
+            inputs[0]->accumulate_grad(output.grad);
+            inputs[1]->accumulate_grad(output.grad);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
         }
         std::string typestr() const noexcept override { return "AddOp"; }
     };
@@ -49,10 +65,18 @@ namespace ttie {
         MulOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
 
         void backward(TensorImpl& output) override { // c = a * b, ∂c/∂a = b, ∂c/∂b = a
-            std::vector<float> final_grad = output.grad;
-            std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>()); // TODO fix
-            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->accumulate_grad(final_grad); });
-            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->backward(); });
+            std::vector<float> final_grad_a = inputs[1]->data;
+            std::vector<float> final_grad_b = inputs[0]->data;
+
+            std::transform(final_grad_a.begin(), final_grad_a.end(), output.grad.begin(), final_grad_a.begin(), std::multiplies<float>());
+            std::transform(final_grad_b.begin(), final_grad_b.end(), output.grad.begin(), final_grad_b.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+            std::cout << "aboba";
         }
         std::string typestr() const noexcept override { return "MulOp"; }
     };
@@ -86,8 +110,6 @@ namespace ttie {
                 impl_->data = data_;
                 impl_->strides.resize(impl_->data.size());
                 impl_->shape_ = {data_.size()};
-                impl_->grad.resize(data_.size());
-                std::fill(impl_->grad.begin(), impl_->grad.end(), 1.0f);
             }
 
         private:
