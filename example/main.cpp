@@ -8,12 +8,12 @@ using namespace ttie;
 
 int main()
 {
-    Tensor a(std::vector<float>({1, 2, 3, 4}));
-    Tensor b(std::vector<float>({1, 2, 3, 4}));
+    Tensor a(std::vector<float>({1, 2, 3, 4}), true);
+    Tensor b(std::vector<float>({1, 2, 3, 4}), true);
     a.reshape({1, 2, 2});
     b.reshape({1, 2, 2});
 
-    Tensor c = a + (b + a);
+    Tensor c = a * b;
 
     std::cout << "c:" << std::endl;
     c.backward();
@@ -21,6 +21,5 @@ int main()
     std::cout << a << std::endl;
     std::cout << b << std::endl;
     std::cout << c << std::endl;
-    std::for_each(b.get_grad().begin(), b.get_grad().end(), [](float t){ std::cout << t << " "; });
     return 0;
 }

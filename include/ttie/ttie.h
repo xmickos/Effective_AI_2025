@@ -16,7 +16,7 @@ namespace ttie {
         std::vector<std::shared_ptr<TensorImpl>> inputs;
 
         GradFn(const std::initializer_list<std::shared_ptr<TensorImpl>> lst_) : inputs(lst_) {}
-        virtual void backward(TensorImpl& output) = 0; // TensorImpl -> Tensor?
+        virtual void backward(TensorImpl& output) = 0;
         virtual std::string typestr() const noexcept = 0;
     };  // GradFn не нужно знать свой истинный тип если backward написан в общем виде?
 
@@ -31,12 +31,7 @@ namespace ttie {
         void backward() { if(grad_fn) { grad_fn->backward(*this); } }
 
         void accumulate_grad(const std::vector<float> grad_) {
-            if(grad.empty()) {
-                grad.resize(data.size());
-                std::fill(grad.begin(), grad.end(), 1.0f);
-            } else {
-                std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
-            }
+            std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
         }
     };
 
@@ -48,6 +43,18 @@ namespace ttie {
             std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->backward(); });
         }
         std::string typestr() const noexcept override { return "AddOp"; }
+    };
+
+    struct MulOp final : public GradFn {
+        MulOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+
+        void backward(TensorImpl& output) override { // c = a * b, ∂c/∂a = b, ∂c/∂b = a
+            std::vector<float> final_grad = output.grad;
+            std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>()); // TODO fix
+            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->accumulate_grad(final_grad); });
+            std::for_each(inputs.begin(), inputs.end(), [&](std::shared_ptr<TensorImpl> t){ t->backward(); });
+        }
+        std::string typestr() const noexcept override { return "MulOp"; }
     };
 
     template <typename T>
@@ -79,6 +86,8 @@ namespace ttie {
                 impl_->data = data_;
                 impl_->strides.resize(impl_->data.size());
                 impl_->shape_ = {data_.size()};
+                impl_->grad.resize(data_.size());
+                std::fill(impl_->grad.begin(), impl_->grad.end(), 1.0f);
             }
 
         private:
@@ -131,6 +140,15 @@ namespace ttie {
                 return *this;
             }
 
+            Tensor& operator*=(const Tensor& lhs) {
+                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                }
+
+                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::multiplies<float>());
+                return *this;
+            }
+
         private:
             size_t compute_index(const std::initializer_list<size_t>& idx) const {
                 if(std::equal(impl_->shape_.begin(), impl_->shape_.end(), idx.begin(),
@@ -162,9 +180,14 @@ namespace ttie {
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
                 tmp += rhs;
                 tmp.set_grad(std::make_shared<AddOp>(impl_, rhs.impl_));
-                std::cout << *this << "\n";
-                std::cout << rhs << "\n";
-                std::cout << tmp << "\n";
+                return tmp;
+            }
+
+            Tensor operator*(const Tensor& rhs) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
+                tmp *= rhs;
+                tmp.set_grad(std::make_shared<MulOp>(impl_, rhs.impl_));
                 return tmp;
             }
 
