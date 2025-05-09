@@ -18,7 +18,7 @@ namespace ttie {
         GradFn(const std::initializer_list<std::shared_ptr<TensorImpl>> lst_) : inputs(lst_) {}
         virtual void backward(TensorImpl& output) = 0;
         virtual std::string typestr() const noexcept = 0;
-    };  // GradFn не нужно знать свой истинный тип если backward написан в общем виде?
+    };
 
     struct TensorImpl final {
         std::vector<size_t> shape_;
@@ -114,6 +114,46 @@ namespace ttie {
         std::string typestr() const noexcept override { return "UnaryMinusOp"; }
     };
 
+    struct SqrtOp final : public GradFn {
+        SqrtOp(const std::shared_ptr<TensorImpl>& a) : GradFn({a}) {}
+
+        void backward(TensorImpl& output) override { // c = sqrt(a), ∂c/∂a = 1 / (2 * sqrt(a) + 1e-8)
+            std::vector<float> final_grad(output.data.size());
+            std::transform(inputs[0]->data.begin(), inputs[0]->data.end(), final_grad.begin(), [](float t){ return 1.0f / (2.0 * std::sqrt(t) + 1e-8); });
+
+            std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad);
+
+            inputs[0]->backward();
+        }
+        std::string typestr() const noexcept override { return "SqrtOp"; }
+    };
+
+    struct DivOp final : public GradFn {
+        DivOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+
+        void backward(TensorImpl& output) override { // c = a / b, ∂c/∂b = -a / (b^2 + 1e-8), ∂c/∂a = 1 / b
+            std::vector<float> final_grad_a(output.data.size());
+            std::vector<float> final_grad_b(output.data.size());
+
+            std::transform(inputs[0]->data.begin(), inputs[0]->data.end(), inputs[1]->data.begin(), final_grad_a.begin(),
+                [](float a, float b){ return 1.0f / (b + 1e-8); });
+            std::transform(inputs[0]->data.begin(), inputs[0]->data.end(), inputs[1]->data.begin(), final_grad_b.begin(),
+                [](float a, float b){ return -a / ( b * b + 1e-8); });
+
+            std::transform(final_grad_a.begin(), final_grad_a.end(), output.grad.begin(), final_grad_a.begin(), std::multiplies<float>());
+            std::transform(final_grad_b.begin(), final_grad_b.end(), output.grad.begin(), final_grad_b.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+        }
+        std::string typestr() const noexcept override { return "DivOp"; }
+    };
+
     template <typename T>
     static std::string vector_to_string(const std::vector<T> &vec, size_t limit = 5) {
         std::stringstream ss;
@@ -197,7 +237,7 @@ namespace ttie {
 
             Tensor& operator-=(const Tensor& lhs) {
                 if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                    throw std::invalid_argument("Can't apply operator-=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
                 }
 
                 std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::minus<float>());
@@ -206,18 +246,25 @@ namespace ttie {
 
             Tensor& operator*=(const Tensor& lhs) {
                 if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                    throw std::invalid_argument("Can't apply operator*=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
                 }
 
                 std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::multiplies<float>());
                 return *this;
             }
 
+            Tensor& operator/=(const Tensor& lhs) {
+                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator/=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                }
+
+                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::divides<float>());
+                return *this;
+            }
+
         private:
             size_t compute_index(const std::initializer_list<size_t>& idx) const {
-                if(std::equal(impl_->shape_.begin(), impl_->shape_.end(), idx.begin(),
-                    [](size_t a, size_t b){ return a < b; }
-                )) {
+                if(std::equal(impl_->shape_.begin(), impl_->shape_.end(), idx.begin(), std::less<float>())) {
                     throw std::invalid_argument("Invalid indexes for tensor of shape" + vector_to_string(impl_->shape_));
                 }
 
@@ -268,6 +315,22 @@ namespace ttie {
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
                 tmp *= rhs;
                 tmp.set_grad(std::make_shared<MulOp>(impl_, rhs.impl_));
+                return tmp;
+            }
+
+            Tensor operator/(const Tensor& rhs) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
+                tmp /= rhs;
+                tmp.set_grad(std::make_shared<DivOp>(impl_, rhs.impl_));
+                return tmp;
+            }
+
+            static Tensor sqrt(const Tensor& arg) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*arg.impl_);
+                std::transform(tmp.impl_->data.begin(), tmp.impl_->data.end(), tmp.impl_->data.begin(), std::sqrtf);
+                tmp.set_grad(std::make_shared<SqrtOp>(arg.impl_));
                 return tmp;
             }
 
