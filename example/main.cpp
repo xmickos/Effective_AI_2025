@@ -13,13 +13,13 @@ int main()
     a.reshape({1, 2, 2});
     b.reshape({1, 2, 2});
 
-    Tensor c = a / b;
+    Tensor c = Tensor::log(a);
 
     std::cout << "c:" << std::endl;
     c.backward();
     std::cout << "backwarded" << std::endl;
-    std::cout << a[{1, 1, 1}];
-    std::cout << b << std::endl;
+    std::cout << a[{0, 1, 0}] << std::endl;
+    std::cout << a << std::endl;
     std::cout << c << std::endl;
     return 0;
 }

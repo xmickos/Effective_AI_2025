@@ -130,6 +130,22 @@ namespace ttie {
         std::string typestr() const noexcept override { return "SqrtOp"; }
     };
 
+    struct LogOp final : public GradFn {
+        LogOp(const std::shared_ptr<TensorImpl>& a) : GradFn({a}) {}
+
+        void backward(TensorImpl& output) override { // c = log(a), ∂c/∂a = 1 / ( a + 1e-8)
+            std::vector<float> final_grad(output.data.size());
+            std::transform(inputs[0]->data.begin(), inputs[0]->data.end(), final_grad.begin(), [](float t){ return 1.0f / (t + 1e-8); });
+
+            std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>());
+
+            inputs[0]->accumulate_grad(final_grad);
+
+            inputs[0]->backward();
+        }
+        std::string typestr() const noexcept override { return "LogOp"; }
+    };
+
     struct DivOp final : public GradFn {
         DivOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
 
@@ -182,6 +198,7 @@ namespace ttie {
             Tensor(const std::vector<float>& data_, bool requires_grad=false) : impl_(new TensorImpl) {
                 impl_->data = data_;
                 impl_->strides.resize(impl_->data.size());
+                std::fill(impl_->strides.begin(), impl_->strides.end(), 1);
                 impl_->shape_ = {data_.size()};
             }
 
@@ -204,9 +221,20 @@ namespace ttie {
                 }
 
                 impl_->shape_ = new_shape;
+                impl_->strides.resize(new_shape.size());
 
-                for(int i = 0; i < impl_->shape_.size(); ++i) { // TODO: rewrite through STL & fix
-                    impl_->strides[i] = std::accumulate(std::next(impl_->shape_.begin()), impl_->shape_.end(), 1, std::multiplies<size_t>());
+                /*
+                 *
+                 *  a.shape = [2, 3, 4]
+                 *  a.strides = [12, 4, 1]
+                 *
+                 *  a.shape = [4, 9, 16, 25]
+                 *  a.strides = [9*16*25, 16*25, 25, 1]
+                 *
+                */
+
+                for(int i = 0; i < impl_->shape_.size() - 1; ++i) { // TODO: rewrite through STL & fix
+                    impl_->strides[i] = std::accumulate(std::next(impl_->shape_.begin(), i + 1), impl_->shape_.end(), 1, std::multiplies<size_t>());
                 }
             }
 
@@ -331,6 +359,14 @@ namespace ttie {
                 tmp.impl_ = std::make_shared<TensorImpl>(*arg.impl_);
                 std::transform(tmp.impl_->data.begin(), tmp.impl_->data.end(), tmp.impl_->data.begin(), std::sqrtf);
                 tmp.set_grad(std::make_shared<SqrtOp>(arg.impl_));
+                return tmp;
+            }
+
+            static Tensor log(const Tensor& arg) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*arg.impl_);
+                std::transform(tmp.impl_->data.begin(), tmp.impl_->data.end(), tmp.impl_->data.begin(), std::logf);
+                tmp.set_grad(std::make_shared<LogOp>(arg.impl_));
                 return tmp;
             }
 
