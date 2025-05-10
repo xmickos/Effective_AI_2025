@@ -14,37 +14,20 @@ TEST(TensorTest, BasicOps) {
     a.reshape({1, 2, 2});
     b.reshape({2, 1, 2});
 
-    std::cout << a + b;
+    EXPECT_THROW(a + b, std::exception);
 }
 
-#if 0
-TEST(TensorTest, DISABLED_ValidateShape) {
+TEST(TensorTest, InitializeAndSetData) {
     Tensor t;
-    t.shape = {2, 3};
-    EXPECT_TRUE(t.validate_shape());
+    t.reshape({2, 3});
 
-    t.shape = {0, 3};
-    EXPECT_FALSE(t.validate_shape());
-
-    t.shape = {};
-    EXPECT_FALSE(t.validate_shape());
-
-    EXPECT_THROW(t.resize(), std::exception);
+    EXPECT_EQ(t.size(), 6);
 }
 
-TEST(TensorTest, DISABLED_InitializeAndSetData) {
-    Tensor t;
-    t.shape = {2, 3};
-    t.resize();
-
-    EXPECT_EQ(t.data.size(), 6);
-}
-
+#if 0 // cant be used now
 TEST(TensorTest, DISABLED_GradientOperations) {
     Tensor t;
-    t.shape = {2, 3};
-    t.resize();
-    t.resize_grad();
+    t.reshape({2, 3});
 
     EXPECT_EQ(t.grad.size(), 6);
 
@@ -58,34 +41,35 @@ TEST(TensorTest, DISABLED_GradientOperations) {
         EXPECT_FLOAT_EQ(t.grad[i], 0.0f);
     }
 }
+#endif
 
-TEST(LayerTest, DISABLED_ReLU) {
+TEST(LayerTest, ReLU) {
     ReLU relu;
     EXPECT_EQ(relu.parameters().size(), 0);
 
     Tensor input;
-    input.shape = {2, 3};
-    input.resize();
-    for (size_t i = 0; i < input.data.size(); ++i) {
-        input.data[i] = static_cast<float>(i) - 2.0f;
+    input.reshape({2, 3});
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>(i) - 2.0f;
     }
 
     Tensor output;
     relu.forward(input, output);
 
-    for (size_t i = 0; i < output.data.size(); ++i) {
-        EXPECT_FLOAT_EQ(output.data[i], std::max(0.0f, input.data[i]));
+    for (size_t i = 0; i < output.size(); ++i) {
+        EXPECT_FLOAT_EQ(output[i], std::max(0.0f, input[i]));
     }
 
-    output.resize_grad();
-    for (size_t i = 0; i < output.grad.size(); ++i) {
-        output.grad[i] = 1.0f;
-    }
+    // for (size_t i = 0; i < output.size(); ++i) {
+    //     output[i] = 1.0f;
+    // }
 
-    relu.backward(output, input);
+    output.backward();
 
-    for (size_t i = 0; i < input.grad.size(); ++i) {
-        EXPECT_FLOAT_EQ(input.grad[i], input.data[i] > 0 ? 1.0f : 0.0f);
+    std::cout << output << std::endl;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        EXPECT_FLOAT_EQ(grad_[i], input[i] >= 0 ? 1.0f : 0.0f);
     }
 }
 
@@ -95,47 +79,45 @@ TEST(LayerTest, DISABLED_Linear) {
     auto params = linear.parameters();
     EXPECT_EQ(params.size(), 2);
 
-    EXPECT_EQ(linear.weight.shape.size(), 2);
-    EXPECT_EQ(linear.weight.shape[0], 3);
-    EXPECT_EQ(linear.weight.shape[1], 2);
-    EXPECT_EQ(linear.bias.shape.size(), 1);
-    EXPECT_EQ(linear.bias.shape[0], 2);
+    EXPECT_EQ(linear.weight.shape().size(), 2);
+    EXPECT_EQ(linear.weight.shape()[0], 3);
+    EXPECT_EQ(linear.weight.shape()[1], 2);
+    EXPECT_EQ(linear.bias.shape().size(), 1);
+    EXPECT_EQ(linear.bias.shape()[0], 2);
 
     Tensor input;
-    input.shape = {2, 3};
-    input.resize();
-    for (size_t i = 0; i < input.data.size(); ++i) {
-        input.data[i] = static_cast<float>(i) / input.data.size();
+    input.reshape({2, 3});
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>(i) / input.size();
     }
 
     Tensor output;
     linear.forward(input, output);
 
-    EXPECT_EQ(output.shape.size(), 2);
-    EXPECT_EQ(output.shape[0], 2);
-    EXPECT_EQ(output.shape[1], 2);
+    EXPECT_EQ(output.shape().size(), 2);
+    EXPECT_EQ(output.shape()[0], 2);
+    EXPECT_EQ(output.shape()[1], 2);
 
-    output.resize_grad();
-    for (size_t i = 0; i < output.grad.size(); ++i) {
-        output.grad[i] = 1.0f;
+    for (size_t i = 0; i < output.size(); ++i) {
+        output[i] = 1.0f;
     }
 
-    input.resize_grad();
     input.zero_grad();
 
     linear.backward(output, input);
 
     bool has_nonzero = false;
-    for (size_t i = 0; i < input.grad.size(); ++i) {
-        if (input.grad[i] != 0.0f) {
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] != 0.0f) {
             has_nonzero = true;
             break;
         }
     }
     EXPECT_TRUE(has_nonzero);
 
+    #if 0
     has_nonzero = false;
-    for (size_t i = 0; i < linear.weight.grad.size(); ++i) {
+    for (size_t i = 0; i < linear.weight.size(); ++i) {
         if (linear.weight.grad[i] != 0.0f) {
             has_nonzero = true;
             break;
@@ -151,7 +133,9 @@ TEST(LayerTest, DISABLED_Linear) {
         }
     }
     EXPECT_TRUE(has_nonzero);
+    #endif
 }
+#if 0
 
 TEST(LayerTest, DISABLED_LinearVSTorch) {
     /* PyTorch reference forward and backward with predefined weights and biases
@@ -358,7 +342,6 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     EXPECT_NEAR(layer2->bias.grad[0], 2.0000f, 1e-4f);
 }
 #endif
-
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

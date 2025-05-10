@@ -26,6 +26,7 @@ namespace ttie {
         std::vector<float> grad;
         std::vector<size_t> strides;
         std::shared_ptr<GradFn> grad_fn;
+        size_t ndims;
         bool requires_grad = false;
 
         void backward() {
@@ -99,6 +100,64 @@ namespace ttie {
         std::string typestr() const noexcept override { return "SubOp"; }
     };
 
+    struct MaxOp final : public GradFn {
+        MaxOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+        MaxOp(const std::shared_ptr<TensorImpl>& a) : GradFn({a}) {}
+
+        void backward(TensorImpl& output) override {
+            /*
+             *
+             *  c = max(a, b)
+             *  c = {a, a >= b; b, a <= b}
+             *  ∂c/∂a = {1, a >= b; 0, a <= b}
+             *  ∂c/∂b = {0, a >= b; 1, a <= b}
+             *
+            */
+            std::vector<float> final_grad_a(output.grad.size());
+            std::vector<float> final_grad_b(output.grad.size());
+
+            std::transform(
+                inputs[0]->data.begin(),
+                inputs[0]->data.end(),
+                inputs[1]->data.begin(),
+                final_grad_a.begin(),
+                // [](float a_, float b_){ if (std::abs(a_ - b_) < 1e-8) { return 0.5f; } else { return a_ > b_ ? 1.0f : 0.0f; } }
+                [](float a_, float b_){ return a_ > b_ ? 1.0f : 0.0f; }
+            );
+
+            std::transform(
+                inputs[0]->data.begin(),
+                inputs[0]->data.end(),
+                inputs[1]->data.begin(),
+                final_grad_b.begin(),
+                // [](float a_, float b_){ if (std::abs(a_ - b_) < 1e-8) { return 0.5f; } else { return a_ > b_ ? 1.0f : 0.0f; } }
+                [](float a_, float b_){ return a_ > b_ ? 0.0f : 1.0f; }
+            );
+
+            std::transform(
+                final_grad_a.begin(),
+                final_grad_a.end(),
+                output.grad.begin(),
+                final_grad_a.begin(),
+                std::multiplies<float>()
+            );
+            std::transform(
+                final_grad_b.begin(),
+                final_grad_b.end(),
+                output.grad.begin(),
+                final_grad_b.begin(),
+                std::multiplies<float>()
+            );
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+        }
+        std::string typestr() const noexcept override { return "MaxOp"; }
+    };
+
     struct UnaryMinusOp final : public GradFn {
         UnaryMinusOp(const std::shared_ptr<TensorImpl>& a) : GradFn({a}) {}
 
@@ -108,7 +167,6 @@ namespace ttie {
             std::transform(final_grad.begin(), final_grad.end(), output.grad.begin(), final_grad.begin(), std::multiplies<float>());
 
             inputs[0]->accumulate_grad(final_grad);
-
             inputs[0]->backward();
         }
         std::string typestr() const noexcept override { return "UnaryMinusOp"; }
@@ -193,10 +251,11 @@ namespace ttie {
             std::shared_ptr<TensorImpl> impl_;
 
         public:
-            Tensor() : impl_(nullptr) {}
+            Tensor() : impl_(new TensorImpl) {}
 
             Tensor(const std::vector<float>& data_, bool requires_grad=false) : impl_(new TensorImpl) {
                 impl_->data = data_;
+                impl_->ndims = 1;
                 impl_->strides.resize(impl_->data.size());
                 std::fill(impl_->strides.begin(), impl_->strides.end(), 1);
                 impl_->shape_ = {data_.size()};
@@ -214,26 +273,23 @@ namespace ttie {
 
             void backward() { impl_->backward(); }
 
-            void reshape(std::initializer_list<size_t> new_shape) {
+            void reshape(std::vector<size_t> new_shape) {
                 size_t new_size = std::accumulate(new_shape.begin(), new_shape.end(), 1, std::multiplies<size_t>());
+                if(empty()) {
+                    impl_->data.resize(new_size);
+                    impl_->shape_ = new_shape;
+                    impl_->strides.resize(new_shape.size());
+                    impl_->ndims = new_shape.size();
+                }
                 if(size() != new_size) {
                     throw std::invalid_argument("Invalid shape for tensor of size " + std::to_string(size()));
                 }
 
                 impl_->shape_ = new_shape;
                 impl_->strides.resize(new_shape.size());
+                impl_->ndims = new_shape.size();
 
-                /*
-                 *
-                 *  a.shape = [2, 3, 4]
-                 *  a.strides = [12, 4, 1]
-                 *
-                 *  a.shape = [4, 9, 16, 25]
-                 *  a.strides = [9*16*25, 16*25, 25, 1]
-                 *
-                */
-
-                for(int i = 0; i < impl_->shape_.size() - 1; ++i) { // TODO: rewrite through STL & fix
+                for(int i = 0; i < impl_->shape_.size() - 1; ++i) {
                     impl_->strides[i] = std::accumulate(std::next(impl_->shape_.begin(), i + 1), impl_->shape_.end(), 1, std::multiplies<size_t>());
                 }
             }
@@ -242,7 +298,7 @@ namespace ttie {
 
             const std::vector<size_t>& shape() const noexcept { return impl_->shape_; }
 
-            void reshape(size_t new_shape) { reshape({new_shape}); }
+            size_t ndims() const noexcept { return impl_->ndims; }
 
             float& operator[](int i) { return impl_->data[i]; }
             const float& operator[](int i) const { return impl_->data[i]; }
@@ -256,7 +312,7 @@ namespace ttie {
 
             Tensor& operator+=(const Tensor& lhs) {
                 if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + vector_to_string(impl_->shape_) + " and " + vector_to_string(lhs.impl_->shape_));
                 }
 
                 std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::plus<float>());
@@ -301,7 +357,7 @@ namespace ttie {
 
         public:
             size_t size() const {
-                if(impl_->data.empty()) { return 0; }
+                if(empty()) { return 0; }
 
                 return std::accumulate(impl_->shape_.begin(), impl_->shape_.end(), 1, std::multiplies<size_t>());
             }
@@ -309,6 +365,8 @@ namespace ttie {
             void zero_grad() {
                 std::fill(impl_->grad.begin(), impl_->grad.end(), 0.0f);
             }
+
+            void fill(float arg) { std::fill(impl_->data.begin(), impl_->data.end(), arg); }
 
             const std::vector<float>& get_data() const noexcept { return impl_->data; }
 
@@ -370,6 +428,30 @@ namespace ttie {
                 return tmp;
             }
 
+            static Tensor max(float a, const Tensor& b) {
+                Tensor tmp;
+                tmp.reshape_as(b);
+                tmp.fill(a);
+                return max(tmp, b);
+            }
+
+            static Tensor max(const Tensor& a, const Tensor& b) {
+                Tensor tmp;
+                tmp.impl_ = std::make_shared<TensorImpl>(*a.impl_);
+                std::transform(
+                    tmp.impl_->data.begin(),
+                    tmp.impl_->data.end(),
+                    b.impl_->data.begin(),
+                    tmp.impl_->data.begin(),
+                    [](float a_, float b_){ return std::max(a_, b_); }
+                );
+                tmp.set_grad(std::make_shared<MaxOp>(a.impl_, b.impl_));
+                return tmp;
+            }
+
+            void reshape_as(const Tensor& arg) { reshape(arg.shape()); }
+
+
             friend std::ostream &operator<<(std::ostream &os, const Tensor &t) {
                 os << "Tensor@" << &t;
 
@@ -409,7 +491,6 @@ namespace ttie {
         virtual ~Layer() {}
     };
 
-    #if 0
     struct Linear : Layer {
         Tensor weight;
         Tensor bias;
@@ -420,14 +501,12 @@ namespace ttie {
             std::uniform_real_distribution<float> dis(-0.1f, 0.1f);
 
             weight.reshape({in_features, out_features});
-            // weight.resize();
 
             for(size_t i = 0; i < in_features * out_features; ++i) {
                 weight[i] = dis(gen);
             }
 
-            bias.reshape(out_features);
-            // bias.resize();
+            bias.reshape({out_features});
 
             for(size_t i = 0; i < out_features; ++i) {
                 bias[i] = dis(gen);
@@ -440,7 +519,6 @@ namespace ttie {
             size_t in_features = weight[0];
             size_t out_features = weight[1];
             output.reshape({input.dim(0), out_features});
-            // output.resize();
 
             for(size_t i = 0; i < input.dim(0); ++i) {
                 for(size_t j = 0; j < out_features; ++j) {
@@ -451,8 +529,8 @@ namespace ttie {
                 }
             }
         }
-        #if 0
         void backward(const Tensor &output, Tensor &input) override {
+            #if 0
             size_t in_features = weight.dim(0);
             size_t out_features = weight.dim(1);
             size_t batch_size = output.dim(0);
@@ -476,8 +554,8 @@ namespace ttie {
                     bias.grad[k] += output.grad[i * out_features + k];
                 }
             }
+            #endif
         }
-        #endif
 
         std::string to_string() const override {
             std::stringstream ss;
@@ -490,18 +568,16 @@ namespace ttie {
         std::vector<Tensor *> parameters() override { return {}; }
 
         void forward(const Tensor &input, Tensor &output) override {
-            output.shape = input.shape;
-            output.resize();
-            for(size_t i = 0; i < input.data.size(); ++i) {
-                output.data[i] = std::max(0.0f, input.data[i]);
-            }
+            output.reshape_as(input);
+            output = Tensor::max(0.0f, input);
         }
 
         void backward(const Tensor &output, Tensor &input) override {
-            input.resize_grad();
+            #if 0
             for(size_t i = 0; i < output.data.size(); ++i) {
                 input.grad[i] = (output.data[i] > 0) ? output.grad[i] : 0;
             }
+            #endif
         }
 
         std::string to_string() const override { return "ReLU()"; }
@@ -562,23 +638,21 @@ namespace ttie {
     };
 
     Tensor mse_loss(const Tensor &pred, const Tensor &target) {
-        if(pred.data.size() != target.data.size()) {
+        if(pred.size() != target.size()) {
             throw std::invalid_argument("Prediction and target tensors must have same size");
         }
 
         Tensor loss;
-        loss.shape = {1};
-        loss.resize();
-        loss.data[0] = 0.0f;
+        loss.reshape({1});
+        loss[0] = 0.0f;
 
-        for (size_t i = 0; i < pred.data.size(); ++i) {
-            float diff = pred.data[i] - target.data[i];
-            loss.data[0] += diff * diff;
+        for (size_t i = 0; i < pred.size(); ++i) {
+            float diff = pred[i] - target[i];
+            loss[0] += diff * diff;
         }
-        loss.data[0] /= pred.data.size();
+        loss[0] /= pred.size();
         return loss;
     }
-    #endif
 
 }
 
