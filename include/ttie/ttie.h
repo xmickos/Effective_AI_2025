@@ -29,6 +29,27 @@ namespace ttie {
         size_t ndims;
         bool requires_grad = false;
 
+        TensorImpl() {}
+
+        TensorImpl(std::initializer_list<float> lst_) : data(lst_) {
+            shape_ = {lst_.size()};
+            grad.resize(lst_.size());
+            ndims = 1;
+            strides.resize(ndims);
+        }
+
+        TensorImpl(std::initializer_list<int> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
+        shape_.end()), shape_(shape_.begin(), shape_.end()), requires_grad(requires_grad_) {
+            int total_size = std::accumulate(shape_.begin(), shape_.end(), 0);
+            data.resize(total_size);
+        }
+
+        TensorImpl(std::initializer_list<size_t> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
+        shape_.end()), shape_(shape_.begin(), shape_.end()), requires_grad(requires_grad_) {
+            int total_size = std::accumulate(shape_.begin(), shape_.end(), 0);
+            data.resize(total_size);
+        }
+
         void backward() {
             if(grad_fn) {
                 if(grad.empty()) {
@@ -251,14 +272,34 @@ namespace ttie {
             std::shared_ptr<TensorImpl> impl_;
 
         public:
-            Tensor() : impl_(new TensorImpl) {}
+            Tensor(bool requires_grad_=false) : impl_(new TensorImpl) { impl_->requires_grad = requires_grad_; }
 
-            Tensor(const std::vector<float>& data_, bool requires_grad=false) : impl_(new TensorImpl) {
+            Tensor(const std::vector<float>& data_, bool requires_grad_=false) : impl_(new TensorImpl) {
                 impl_->data = data_;
                 impl_->ndims = 1;
-                impl_->strides.resize(impl_->data.size());
+                impl_->strides.resize(impl_->ndims);
                 std::fill(impl_->strides.begin(), impl_->strides.end(), 1);
                 impl_->shape_ = {data_.size()};
+                impl_->requires_grad = requires_grad_;
+            }
+
+            Tensor(std::initializer_list<float>& data_, bool requires_grad_=false) : impl_(new TensorImpl) {
+                impl_->data.assign(data_);
+                impl_->ndims = 1;
+                impl_->strides.resize(impl_->ndims);
+                impl_->strides[0] = 1;
+                impl_->shape_ = {data_.size()};
+                impl_->requires_grad = requires_grad_;
+            }
+
+            Tensor(std::initializer_list<int> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) { }
+
+            Tensor(std::initializer_list<size_t> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) { }
+
+            Tensor operator=(std::initializer_list<float> list) {
+                Tensor tmp(list);
+                std::swap(*this, tmp);
+                return *this;
             }
 
         private:
@@ -267,9 +308,32 @@ namespace ttie {
                 impl_->grad_fn = node;
             }
 
+            Tensor& inplace_add(const Tensor& rhs) {
+                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::plus<float>());
+                return *this;
+            }
+
+            Tensor& inplace_mul(const Tensor& rhs) {
+                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::multiplies<float>());
+                return *this;
+            }
+
+            Tensor& inplace_sub(const Tensor& rhs) {
+                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::minus<float>());
+                return *this;
+            }
+
+            Tensor& inplace_div(const Tensor& rhs) {
+                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::divides<float>());
+                return *this;
+            }
+
         public:
 
             bool empty() const noexcept { return impl_->data.empty(); }
+
+            bool requires_grad() const noexcept { return impl_->requires_grad; }
+            void requires_grad(bool new_state_) noexcept { impl_->requires_grad = new_state_; }
 
             void backward() { impl_->backward(); }
 
@@ -310,40 +374,50 @@ namespace ttie {
                 return impl_->data[compute_index(idx)];
             }
 
-            Tensor& operator+=(const Tensor& lhs) {
-                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + vector_to_string(impl_->shape_) + " and " + vector_to_string(lhs.impl_->shape_));
+            Tensor& operator+=(const Tensor& rhs) {
+                if(impl_->requires_grad || rhs.impl_->requires_grad) {
+                    throw std::runtime_error("A variable requires grad is used in a in-place += operation.");
+                }
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator+=() for tensors of shape " + vector_to_string(impl_->shape_) + " and " + vector_to_string(rhs.impl_->shape_));
                 }
 
-                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::plus<float>());
-                return *this;
+                std::cout << "impl_->requires_grad || rhs.impl_->requires_grad = " << impl_->requires_grad || rhs.impl_->requires_grad;
+
+                return inplace_add(rhs);
             }
 
-            Tensor& operator-=(const Tensor& lhs) {
-                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator-=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+            Tensor& operator-=(const Tensor& rhs) {
+                if(impl_->requires_grad || rhs.impl_->requires_grad) {
+                    throw std::runtime_error("A variable requires grad is used in a in-place -= operation.");
+                }
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator-=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
                 }
 
-                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::minus<float>());
-                return *this;
+                return inplace_sub(rhs);
             }
 
-            Tensor& operator*=(const Tensor& lhs) {
-                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator*=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+            Tensor& operator*=(const Tensor& rhs) {
+                if(impl_->requires_grad || rhs.impl_->requires_grad) {
+                    throw std::runtime_error("A variable requires grad is used in a in-place *= operation.");
+                }
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator*=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
                 }
 
-                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::multiplies<float>());
-                return *this;
+                return inplace_mul(rhs);
             }
 
-            Tensor& operator/=(const Tensor& lhs) {
-                if(size() != lhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), lhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator/=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(lhs.size()));
+            Tensor& operator/=(const Tensor& rhs) {
+                if(impl_->requires_grad || rhs.impl_->requires_grad) {
+                    throw std::runtime_error("A variable requires grad is used in a in-place /= operation.");
+                }
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator/=() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
                 }
 
-                std::transform(impl_->data.begin(), impl_->data.end(), lhs.impl_->data.begin(), impl_->data.begin(), std::divides<float>());
-                return *this;
+                return inplace_div(rhs);
             }
 
         private:
@@ -373,17 +447,23 @@ namespace ttie {
             const std::vector<float>& get_grad() const noexcept { return impl_->grad; }
 
             Tensor operator+(const Tensor& rhs) {
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator+() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
+                }
                 Tensor tmp;
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
-                tmp += rhs;
+                tmp.inplace_add(rhs);
                 tmp.set_grad(std::make_shared<AddOp>(impl_, rhs.impl_));
                 return tmp;
             }
 
             Tensor operator-(const Tensor& rhs) {
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator-() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
+                }
                 Tensor tmp;
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
-                tmp -= rhs;
+                tmp.inplace_sub(rhs);
                 tmp.set_grad(std::make_shared<SubOp>(impl_, rhs.impl_));
                 return tmp;
             }
@@ -397,17 +477,23 @@ namespace ttie {
             }
 
             Tensor operator*(const Tensor& rhs) {
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator*() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
+                }
                 Tensor tmp;
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
-                tmp *= rhs;
+                tmp.inplace_mul(rhs);
                 tmp.set_grad(std::make_shared<MulOp>(impl_, rhs.impl_));
                 return tmp;
             }
 
             Tensor operator/(const Tensor& rhs) {
+                if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
+                    throw std::invalid_argument("Can't apply operator/() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
+                }
                 Tensor tmp;
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
-                tmp /= rhs;
+                tmp.inplace_div(rhs);
                 tmp.set_grad(std::make_shared<DivOp>(impl_, rhs.impl_));
                 return tmp;
             }
@@ -434,6 +520,83 @@ namespace ttie {
                 tmp.fill(a);
                 return max(tmp, b);
             }
+
+            static Tensor matmul(const Tensor& a, const Tensor& b) {
+                if(a.ndims() == 1 && b.ndims() == 1) {
+                    return dot_product(a, b);
+                } else if(a.ndims() == 2 && b.ndims() == 2) {
+                    return matrix_matrix_product(a, b);
+                } else if(a.ndims() == 1 && b.ndims() == 2) {
+                    return matrix_vector_product(b, a);
+                } else if(a.ndims() == 2 && b.ndims() == 1) {
+                    return matrix_vector_product(a, b);
+                } else {
+                    throw std::invalid_argument("Invalid tensors shape for matmul.");
+                }
+            }
+
+            static Tensor dot_product(const Tensor& a, const Tensor& b) {
+                if(a.shape()[0] != b.shape()[0]) {
+                    throw std::invalid_argument("Invalid shapes for dot product: " + std::to_string(a.shape()[0]) + \
+                        " and " + std::to_string(b.shape()[0])
+                    );
+                }
+                Tensor c({a.shape()[0]});
+                std::transform(
+                    a.impl_->data.begin(), a.impl_->data.end(), b.impl_->data.begin(),
+                    c.impl_->data.begin(),
+                    std::multiplies<float>()
+                );
+                return c;
+            }
+
+            static Tensor matrix_matrix_product(const Tensor& a, const Tensor& b) {
+                int M = a.shape()[0], N = a.shape()[1], K = b.shape()[1];
+                if(N != b.shape()[0]) {
+                    throw std::invalid_argument("Invalid shapes for matmul: (" + std::to_string(M) + ", " + \
+                        std::to_string(N) + ") and (" + std::to_string(b.shape()[0]) + ", " + std::to_string(K) + ")."
+                    );
+                }
+                Tensor c({M, N});
+                std::vector<float> fixed_col(K);
+
+                for(size_t i = 0; i < N; ++i) {
+                    for(size_t q = 0; q < K; ++q) {
+                        fixed_col[q] = b[{q, i}];
+                    }
+                    for(size_t j = 0; j < N; ++j) {
+                        c[{j, i}] = std::transform_reduce(
+                            std::next(a.impl_->data.begin(), j * M),
+                            std::next(a.impl_->data.begin(), (j + 1) * M),
+                            fixed_col.begin(), 0.0f
+                        );
+                    }
+                }
+
+                return c;
+            }
+
+            static Tensor matrix_vector_product(const Tensor& a, const Tensor& b) {
+                if(a.shape()[1] != b.shape()[0]) {
+                    throw std::invalid_argument("Invalid arguments shape for matrix_vector_product: (" + std::to_string(a.shape()[0]) + \
+                    ", " + std::to_string(a.shape()[1]) + ") and (" + std::to_string(b.shape()[0]) + ")."
+                    );
+                }
+                int M = a.shape()[0], N = a.shape()[1];
+                Tensor c({N});
+
+                for(int i = 0; i < M; ++i) {
+                    c[i] = std::transform_reduce(
+                        std::next(a.impl_->data.begin(), i * M),
+                        std::next(a.impl_->data.begin(), (i + 1) * M),
+                        b.impl_->data.begin(),
+                        0.0f
+                    );
+                }
+
+                return c;
+            }
+
 
             static Tensor max(const Tensor& a, const Tensor& b) {
                 Tensor tmp;
@@ -495,7 +658,7 @@ namespace ttie {
         Tensor weight;
         Tensor bias;
 
-        Linear(size_t in_features, size_t out_features) {
+        Linear(size_t in_features, size_t out_features) : weight(true), bias(true) {
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_real_distribution<float> dis(-0.1f, 0.1f);
@@ -516,18 +679,19 @@ namespace ttie {
         std::vector<Tensor *> parameters() override { return {&weight, &bias}; }
 
         void forward(const Tensor &input, Tensor &output) override {
-            size_t in_features = weight[0];
-            size_t out_features = weight[1];
+            size_t in_features = weight.shape()[0];
+            size_t out_features = weight.shape()[1];
             output.reshape({input.dim(0), out_features});
 
-            for(size_t i = 0; i < input.dim(0); ++i) {
-                for(size_t j = 0; j < out_features; ++j) {
-                    output[i * out_features + j] = bias[j];
-                    for(size_t k = 0; k < in_features; ++k) {
-                        output[i * out_features + j] += input[i * in_features + k] * weight[k * out_features + j];
-                    }
-                }
-            }
+            // for(size_t i = 0; i < input.dim(0); ++i) {
+            //     for(size_t j = 0; j < out_features; ++j) {
+            //         output[i * out_features + j] = bias[j];
+            //         for(size_t k = 0; k < in_features; ++k) {
+            //             output[i * out_features + j] += input[i * in_features + k] * weight[k * out_features + j];
+            //         }
+            //     }
+            // }
+            output = Tensor::matmul(input, weight);
         }
         void backward(const Tensor &output, Tensor &input) override {
             #if 0

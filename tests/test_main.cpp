@@ -67,13 +67,21 @@ TEST(LayerTest, ReLU) {
     output.backward();
 
     std::cout << output << std::endl;
+    auto grad_ = output.get_grad();
 
-    for (size_t i = 0; i < input.size(); ++i) {
+    #if 0
+    for (size_t i = 0; i < input.size(); ++i) {  // ???
         EXPECT_FLOAT_EQ(grad_[i], input[i] >= 0 ? 1.0f : 0.0f);
+    }
+    #endif
+
+    auto input_grad = input.get_grad();
+    for(size_t i = 0; i < input.size(); ++i) {
+        EXPECT_FLOAT_EQ(input_grad[i], input[i] >= 0 ? 1.0f : 0.0f);
     }
 }
 
-TEST(LayerTest, DISABLED_Linear) {
+TEST(LayerTest, Linear) {
     Linear linear(3, 2);
 
     auto params = linear.parameters();
@@ -85,18 +93,20 @@ TEST(LayerTest, DISABLED_Linear) {
     EXPECT_EQ(linear.bias.shape().size(), 1);
     EXPECT_EQ(linear.bias.shape()[0], 2);
 
-    Tensor input;
+    Tensor input(true);
     input.reshape({2, 3});
     for (size_t i = 0; i < input.size(); ++i) {
         input[i] = static_cast<float>(i) / input.size();
     }
 
-    Tensor output;
+    Tensor output(true);
     linear.forward(input, output);
 
-    EXPECT_EQ(output.shape().size(), 2);
-    EXPECT_EQ(output.shape()[0], 2);
-    EXPECT_EQ(output.shape()[1], 2);
+    auto shape_ = output.shape();
+
+    EXPECT_EQ(shape_.size(), 2);
+    EXPECT_EQ(shape_[0], 2);
+    EXPECT_EQ(shape_[1], 2);
 
     for (size_t i = 0; i < output.size(); ++i) {
         output[i] = 1.0f;
@@ -104,7 +114,8 @@ TEST(LayerTest, DISABLED_Linear) {
 
     input.zero_grad();
 
-    linear.backward(output, input);
+    // linear.backward(output, input);
+    output.backward();
 
     bool has_nonzero = false;
     for (size_t i = 0; i < input.size(); ++i) {
@@ -115,10 +126,10 @@ TEST(LayerTest, DISABLED_Linear) {
     }
     EXPECT_TRUE(has_nonzero);
 
-    #if 0
     has_nonzero = false;
+    auto w_grad = linear.weight.get_grad();
     for (size_t i = 0; i < linear.weight.size(); ++i) {
-        if (linear.weight.grad[i] != 0.0f) {
+        if (std::fabs(w_grad[i] - 0.0f) < 1e-8) {
             has_nonzero = true;
             break;
         }
@@ -126,18 +137,17 @@ TEST(LayerTest, DISABLED_Linear) {
     EXPECT_TRUE(has_nonzero);
 
     has_nonzero = false;
-    for (size_t i = 0; i < linear.bias.grad.size(); ++i) {
-        if (linear.bias.grad[i] != 0.0f) {
+    auto bias_grad = linear.bias.get_grad();
+    for (size_t i = 0; i < bias_grad.size(); ++i) {
+        if (std::fabs(bias_grad[i] - 0.0f) < 1e-8) {
             has_nonzero = true;
             break;
         }
     }
     EXPECT_TRUE(has_nonzero);
-    #endif
 }
-#if 0
 
-TEST(LayerTest, DISABLED_LinearVSTorch) {
+TEST(LayerTest, LinearVSTorch) {
     /* PyTorch reference forward and backward with predefined weights and biases
     import torch
 
@@ -169,56 +179,57 @@ TEST(LayerTest, DISABLED_LinearVSTorch) {
     */
 
     Linear linear(3, 2);
-    linear.weight.data = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-    linear.bias.data = {0.1f, 0.2f};
+    linear.weight = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
+    linear.bias = {0.1f, 0.2f};
 
     Tensor input;
-    input.shape = {2, 3};
-    input.resize();
-    input.data = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-    input.resize_grad();
+    input.reshape({2, 3});
+    input = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
 
     // Forward pass
     Tensor output;
     linear.forward(input, output);
 
     // Check output values match PyTorch
-    ASSERT_EQ(output.shape.size(), 2);
-    ASSERT_EQ(output.shape[0], 2);
-    ASSERT_EQ(output.shape[1], 2);
-    EXPECT_NEAR(output.data[0], 0.32f, 1e-5f);
-    EXPECT_NEAR(output.data[1], 0.48f, 1e-5f);
-    EXPECT_NEAR(output.data[2], 0.59f, 1e-5f);
-    EXPECT_NEAR(output.data[3], 0.84f, 1e-5f);
+    ASSERT_EQ(output.shape().size(), 2);
+    ASSERT_EQ(output.shape()[0], 2);
+    ASSERT_EQ(output.shape()[1], 2);
+    EXPECT_NEAR(output[0], 0.32f, 1e-5f);
+    EXPECT_NEAR(output[1], 0.48f, 1e-5f);
+    EXPECT_NEAR(output[2], 0.59f, 1e-5f);
+    EXPECT_NEAR(output[3], 0.84f, 1e-5f);
 
     // Backward pass
-    output.resize_grad();
-    output.grad = {1.0f, 1.0f, 1.0f, 1.0f};
+    // output.grad({1.0f, 1.0f, 1.0f, 1.0f}); // implemented internally
 
-    linear.backward(output, input);
+    // linear.backward(output, input);
+    output.backward();
 
     // Check input gradients match PyTorch
-    ASSERT_EQ(input.grad.size(), 6);
-    EXPECT_NEAR(input.grad[0], 0.3f, 1e-5f);
-    EXPECT_NEAR(input.grad[1], 0.7f, 1e-5f);
-    EXPECT_NEAR(input.grad[2], 1.1f, 1e-5f);
-    EXPECT_NEAR(input.grad[3], 0.3f, 1e-5f);
-    EXPECT_NEAR(input.grad[4], 0.7f, 1e-5f);
-    EXPECT_NEAR(input.grad[5], 1.1f, 1e-5f);
+    auto input_grad = input.get_grad();
+    ASSERT_EQ(input_grad.size(), 6);
+    EXPECT_NEAR(input_grad[0], 0.3f, 1e-5f);
+    EXPECT_NEAR(input_grad[1], 0.7f, 1e-5f);
+    EXPECT_NEAR(input_grad[2], 1.1f, 1e-5f);
+    EXPECT_NEAR(input_grad[3], 0.3f, 1e-5f);
+    EXPECT_NEAR(input_grad[4], 0.7f, 1e-5f);
+    EXPECT_NEAR(input_grad[5], 1.1f, 1e-5f);
 
     // Check weight gradients match PyTorch
-    ASSERT_EQ(linear.weight.grad.size(), 6);
-    EXPECT_NEAR(linear.weight.grad[0], 0.5f, 1e-5f);
-    EXPECT_NEAR(linear.weight.grad[1], 0.5f, 1e-5f);
-    EXPECT_NEAR(linear.weight.grad[2], 0.7f, 1e-5f);
-    EXPECT_NEAR(linear.weight.grad[3], 0.7f, 1e-5f);
-    EXPECT_NEAR(linear.weight.grad[4], 0.9f, 1e-5f);
-    EXPECT_NEAR(linear.weight.grad[5], 0.9f, 1e-5f);
+    auto w_grad = linear.weight.get_grad();
+    ASSERT_EQ(w_grad.size(), 6);
+    EXPECT_NEAR(w_grad[0], 0.5f, 1e-5f);
+    EXPECT_NEAR(w_grad[1], 0.5f, 1e-5f);
+    EXPECT_NEAR(w_grad[2], 0.7f, 1e-5f);
+    EXPECT_NEAR(w_grad[3], 0.7f, 1e-5f);
+    EXPECT_NEAR(w_grad[4], 0.9f, 1e-5f);
+    EXPECT_NEAR(w_grad[5], 0.9f, 1e-5f);
 
     // Check bias gradients match PyTorch
-    ASSERT_EQ(linear.bias.grad.size(), 2);
-    EXPECT_NEAR(linear.bias.grad[0], 2.0f, 1e-5f);
-    EXPECT_NEAR(linear.bias.grad[1], 2.0f, 1e-5f);
+    auto bias_grad = linear.bias.get_grad();
+    ASSERT_EQ(bias_grad.size(), 2);
+    EXPECT_NEAR(bias_grad[0], 2.0f, 1e-5f);
+    EXPECT_NEAR(bias_grad[1], 2.0f, 1e-5f);
 }
 
 TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
@@ -278,70 +289,71 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
 
     // Initialize with the same values as in PyTorch reference
     Linear* layer1 = static_cast<Linear*>(model.layers[0]);
-    layer1->weight.data = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-    layer1->bias.data = {0.1f, 0.2f};
+    layer1->weight = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
+    layer1->bias = {0.1f, 0.2f};
 
     Linear* layer2 = static_cast<Linear*>(model.layers[2]);
-    layer2->weight.data = {0.7f, 0.8f};
-    layer2->bias.data = {0.3f};
+    layer2->weight = {0.7f, 0.8f};
+    layer2->bias = {0.3f};
 
     // Prepare input
     Tensor input;
-    input.shape = {2, 3};
-    input.resize();
-    input.data = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-    input.resize_grad();
+    input.reshape({2, 3});
+    input = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
 
     // Forward pass
     Tensor output;
     model.forward(input, output);
 
     // Verify final output shape and values
-    ASSERT_EQ(output.shape.size(), 2);
-    ASSERT_EQ(output.shape[0], 2);
-    ASSERT_EQ(output.shape[1], 1);
-    EXPECT_NEAR(output.data[0], 0.9080f, 1e-4f);
-    EXPECT_NEAR(output.data[1], 1.3850f, 1e-4f);
+    ASSERT_EQ(output.shape().size(), 2);
+    ASSERT_EQ(output.shape()[0], 2);
+    ASSERT_EQ(output.shape()[1], 1);
+    EXPECT_NEAR(output[0], 0.9080f, 1e-4f);
+    EXPECT_NEAR(output[1], 1.3850f, 1e-4f);
 
     // Backward pass
-    output.resize_grad();
-    output.grad = {1.0f, 1.0f};
+    // output.grad = {1.0f, 1.0f};
 
     model.backward(output, input);
 
     // Check input gradients
-    ASSERT_EQ(input.grad.size(), 6);
-    EXPECT_NEAR(input.grad[0], 0.2300f, 1e-4f);
-    EXPECT_NEAR(input.grad[1], 0.5300f, 1e-4f);
-    EXPECT_NEAR(input.grad[2], 0.8300f, 1e-4f);
-    EXPECT_NEAR(input.grad[3], 0.2300f, 1e-4f);
-    EXPECT_NEAR(input.grad[4], 0.5300f, 1e-4f);
-    EXPECT_NEAR(input.grad[5], 0.8300f, 1e-4f);
+    auto input_grad = input.get_grad();
+    ASSERT_EQ(input_grad.size(), 6);
+    EXPECT_NEAR(input_grad[0], 0.2300f, 1e-4f);
+    EXPECT_NEAR(input_grad[1], 0.5300f, 1e-4f);
+    EXPECT_NEAR(input_grad[2], 0.8300f, 1e-4f);
+    EXPECT_NEAR(input_grad[3], 0.2300f, 1e-4f);
+    EXPECT_NEAR(input_grad[4], 0.5300f, 1e-4f);
+    EXPECT_NEAR(input_grad[5], 0.8300f, 1e-4f);
 
     // Check layer1 weight gradients
-    ASSERT_EQ(layer1->weight.grad.size(), 6);
-    EXPECT_NEAR(layer1->weight.grad[0], 0.3500f, 1e-4f);
-    EXPECT_NEAR(layer1->weight.grad[1], 0.4000f, 1e-4f);
-    EXPECT_NEAR(layer1->weight.grad[2], 0.4900f, 1e-4f);
-    EXPECT_NEAR(layer1->weight.grad[3], 0.5600f, 1e-4f);
-    EXPECT_NEAR(layer1->weight.grad[4], 0.6300f, 1e-4f);
-    EXPECT_NEAR(layer1->weight.grad[5], 0.7200f, 1e-4f);
+    auto l1_w_grad = layer1->weight.get_grad();
+    ASSERT_EQ(l1_w_grad.size(), 6);
+    EXPECT_NEAR(l1_w_grad[0], 0.3500f, 1e-4f);
+    EXPECT_NEAR(l1_w_grad[1], 0.4000f, 1e-4f);
+    EXPECT_NEAR(l1_w_grad[2], 0.4900f, 1e-4f);
+    EXPECT_NEAR(l1_w_grad[3], 0.5600f, 1e-4f);
+    EXPECT_NEAR(l1_w_grad[4], 0.6300f, 1e-4f);
+    EXPECT_NEAR(l1_w_grad[5], 0.7200f, 1e-4f);
 
     // Check layer1 bias gradients
-    ASSERT_EQ(layer1->bias.grad.size(), 2);
-    EXPECT_NEAR(layer1->bias.grad[0], 1.4000f, 1e-4f);
-    EXPECT_NEAR(layer1->bias.grad[1], 1.6000f, 1e-4f);
+    auto l1_bias_grad = layer1->bias.get_grad();
+    ASSERT_EQ(l1_bias_grad.size(), 2);
+    EXPECT_NEAR(l1_bias_grad[0], 1.4000f, 1e-4f);
+    EXPECT_NEAR(l1_bias_grad[1], 1.6000f, 1e-4f);
 
     // Check layer2 weight gradients
-    ASSERT_EQ(layer2->weight.grad.size(), 2);
-    EXPECT_NEAR(layer2->weight.grad[0], 0.9100f, 1e-4f);
-    EXPECT_NEAR(layer2->weight.grad[1], 1.3200f, 1e-4f);
+    auto l2_w_grad = layer2->weight.get_grad();
+    ASSERT_EQ(l2_w_grad.size(), 2);
+    EXPECT_NEAR(l2_w_grad[0], 0.9100f, 1e-4f);
+    EXPECT_NEAR(l2_w_grad[1], 1.3200f, 1e-4f);
 
     // Check layer2 bias gradients
-    ASSERT_EQ(layer2->bias.grad.size(), 1);
-    EXPECT_NEAR(layer2->bias.grad[0], 2.0000f, 1e-4f);
+    auto l2_bias_grad = layer2->bias.get_grad();
+    ASSERT_EQ(l2_bias_grad.size(), 1);
+    EXPECT_NEAR(l2_bias_grad[0], 2.0000f, 1e-4f);
 }
-#endif
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
