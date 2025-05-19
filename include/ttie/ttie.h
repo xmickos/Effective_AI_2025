@@ -36,6 +36,7 @@ namespace ttie {
             grad.resize(lst_.size());
             ndims = 1;
             strides.resize(ndims);
+            strides.back() = 1;
         }
 
         TensorImpl(std::initializer_list<int> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
@@ -326,6 +327,10 @@ struct BroadcastOp : public GradFn {
                 std::fill(impl_->strides.begin(), impl_->strides.end(), 1);
                 impl_->shape_ = shape;
                 impl_->requires_grad = requires_grad_;
+                for(int i = 0; i < shape.size() - 1; ++i) {
+                    impl_->strides[i] = std::accumulate(std::next(shape.begin(), i + 1), shape.end(), 1, std::multiplies<size_t>());
+                }
+                impl_->strides.back() = 1;
             }
 
             Tensor(std::initializer_list<float>& data_, bool requires_grad_=false) : impl_(new TensorImpl) {
@@ -631,19 +636,17 @@ struct BroadcastOp : public GradFn {
                 return c;
             }
 
-            Tensor& transpose() {
+            Tensor transpose() {
                 if(impl_->ndims != 2) {
                     throw std::invalid_argument("Invalid tensor shape for transpose: (" + std::to_string(shape()[0]) + ", " + std::to_string(shape()[1]) + ").");
                 }
-                for(int i = 0; i < impl_->shape_[0]; ++i) {
-                    for(int j = 0; j <= i; ++j) {
-                        std::swap(this->operator[]({i, j}), this->operator[]({j, i}));
-                    }
-                }
 
-                std::swap(impl_->shape_[0], impl_->shape_[1]);
+                Tensor tmp = *this;
 
-                return *this;
+                std::swap(tmp.impl_->shape_[0], tmp.impl_->shape_[1]);
+                std::swap(tmp.impl_->strides[0], tmp.impl_->strides[1]);
+
+                return tmp;
             }
 
             static Tensor matrix_matrix_product(const Tensor& a, const Tensor& b) {
@@ -662,11 +665,11 @@ struct BroadcastOp : public GradFn {
                         fixed_col[q] = b[{q, i}];
                     }
                     for(size_t j = 0; j < M; ++j) {
-                        c[{j, i}] = std::transform_reduce(
-                            std::next(a.impl_->data.begin(), j * N),
-                            std::next(a.impl_->data.begin(), (j + 1) * N),
-                            fixed_col.begin(), 0.0f
-                        );
+                        float acc = 0.0f;
+                        for (size_t k = 0; k < N; ++k) {
+                            acc += a[{j, k}] * fixed_col[k];
+                        }
+                        c[{j, i}] = acc;
                     }
                 }
                 c.set_grad(std::make_shared<MatrixMatrixProdOp>(a.impl_, b.impl_));
@@ -821,6 +824,22 @@ struct BroadcastOp : public GradFn {
     void MatrixMatrixProdOp::backward(TensorImpl& output) { // C = A @ B.
             Tensor grad_a(inputs[0]->data.size());
             Tensor grad_b(inputs[1]->data.size());
+
+            Tensor tmp1 = Tensor(inputs[1], true).transpose();
+            Tensor tmp2 = Tensor(inputs[0], true).transpose();
+            Tensor tmp3 = Tensor(output.grad, output.shape_, true);
+            for(int i = 0; i < tmp2.shape()[0]; ++i) {
+                std::cout << "\n";
+                for(int j = 0; j < tmp2.shape()[1]; ++j) {
+                    std::cout << tmp2[{i, j}] << " ";
+                }
+            }
+            for(int i = 0; i < tmp3.shape()[0]; ++i) {
+                std::cout << "\n";
+                for(int j = 0; j < tmp3.shape()[1]; ++j) {
+                    std::cout << tmp3[{i, j}] << " ";
+                }
+            }
 
             grad_a = Tensor::matmul(Tensor(output.grad, output.shape_, true), Tensor(inputs[1], true).transpose());
             grad_b = Tensor::matmul(Tensor(inputs[0], true).transpose(), Tensor(output.grad, output.shape_, true));

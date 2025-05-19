@@ -188,6 +188,18 @@ TEST(LayerTest, LinearVSTorch) {
     input.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     input.reshape({2, 3});
 
+    Tensor w(true);
+    w.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+    w.reshape({3, 2});
+    w.transpose();
+
+    for(int i = 0; i < w.shape()[0]; ++i) {
+        std::cout << "\n";
+        for(int j = 0; j < w.shape()[1]; ++j) {
+            std::cout << w[{i, j}] << " ";
+        }
+    }
+
     // Forward pass
     Tensor output;
     linear.forward(input, output);
