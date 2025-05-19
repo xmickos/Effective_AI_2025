@@ -333,7 +333,7 @@ struct BroadcastOp : public GradFn {
                 impl_->strides.back() = 1;
             }
 
-            Tensor(std::initializer_list<float>& data_, bool requires_grad_=false) : impl_(new TensorImpl) {
+            Tensor(std::initializer_list<float> data_, bool requires_grad_=false) : impl_(new TensorImpl) {
                 impl_->data.assign(data_);
                 impl_->ndims = 1;
                 impl_->strides.resize(impl_->ndims);
@@ -404,7 +404,7 @@ struct BroadcastOp : public GradFn {
             bool requires_grad() const noexcept { return impl_->requires_grad; }
             void requires_grad(bool new_state_) noexcept { impl_->requires_grad = new_state_; }
 
-            void backward() { impl_->backward(); }
+            void backward() const { impl_->backward(); }
 
             void reshape(std::vector<size_t> new_shape) {
                 size_t new_size = std::accumulate(new_shape.begin(), new_shape.end(), 1, std::multiplies<size_t>());
@@ -683,10 +683,13 @@ struct BroadcastOp : public GradFn {
                 if(ndims() > 1) {
                     throw std::invalid_argument("Can't broadcast tensor with ndims > 1");
                 }
-
-                Tensor out = Tensor(impl_, true);
-                std::vector<size_t> old_shape = shape();
                 size_t new_sz = std::reduce(target_shape.begin(), target_shape.end(), 1, std::multiplies<size_t>());
+                if(new_sz < size()) {
+                    throw std::invalid_argument("Can't broadcast tensor from size " + std::to_string(size()) + " to size " + std::to_string(new_sz));
+                }
+
+                Tensor out = Tensor(impl_, impl_->requires_grad);
+                std::vector<size_t> old_shape = shape();
                 out.impl_->shape_ = target_shape;
                 out.impl_->data.resize(new_sz);
                 out.impl_->strides.resize(target_shape.size());
@@ -694,26 +697,41 @@ struct BroadcastOp : public GradFn {
                     out.impl_->strides[i] = std::accumulate(std::next(out.impl_->shape_.begin(), i + 1), out.impl_->shape_.end(), 1, std::multiplies<size_t>());
                 }
                 out.impl_->strides.back() = 1;
-
-                if(old_shape[0] == target_shape[1]) {
-                    for(int i = 1; i < old_shape[0]; ++i) {
-                        for(int j = 0; j < target_shape[1]; ++j) {
-                            out[{i, j}] = impl_->data[j];
-                        }
-                    }
-                } else if (old_shape[0] == target_shape[0]) {
-                    for(int i = 1; i < old_shape[0]; ++i) {
-                        for(int j = 0; j < target_shape[1]; ++j) {
-                            out[{j, i}] = impl_->data[j];
-                        }
-                    }
-                }
-
                 if(requires_grad()) {
                     out.impl_->requires_grad = true;
                     auto grad_fn = std::make_shared<BroadcastOp>(impl_, old_shape, target_shape);
                     grad_fn->inputs = { impl_ };
                     out.impl_->grad_fn = grad_fn;
+                }
+
+                std::vector<size_t> target_size_ = target_shape;
+                if(target_shape[0] == 1) {
+                    target_size_ = {target_shape[1]};
+                    for(size_t i = 0; i < target_size_[0]; ++i) {
+                        out.impl_->data[i] = impl_->data[0];
+                    }
+                    return out;
+                }
+                if(target_shape[1] == 1) {
+                    target_size_ = {target_shape[0]};
+                    for(size_t i = 0; i < target_size_[0]; ++i) {
+                        out.impl_->data[i] = impl_->data[0];
+                    }
+                    return out;
+                }
+
+                if(old_shape[0] == target_shape[1]) {
+                    for(int i = 0; i < old_shape[0]; ++i) {
+                        for(int j = 0; j < target_shape[1]; ++j) {
+                            out[{i, j}] = impl_->data[j];
+                        }
+                    }
+                } else if (old_shape[0] == target_shape[0]) {
+                    for(int i = 0; i < old_shape[0]; ++i) {
+                        for(int j = 0; j < target_shape[1]; ++j) {
+                            out[{j, i}] = impl_->data[j];
+                        }
+                    }
                 }
 
                 return out;
@@ -764,14 +782,17 @@ struct BroadcastOp : public GradFn {
                 if(axis > size()) {
                     throw std::invalid_argument("Can't find axis " + std::to_string(axis) + " in tensor");
                 }
+                if(shape()[axis] == 1 || shape()[axis] == 0) {
+                    return *this;
+                }
 
                 Tensor out_;
                 size_t m = shape()[0], n = shape()[1];
 
                 if(axis == 0) {
                     Tensor out({n});
-                    for(size_t i = 0; i < m; ++i) {
-                        for(size_t j = 0; j < n; ++j) {
+                    for(size_t i = 0; i < n; ++i) {
+                        for(size_t j = 0; j < m; ++j) {
                             out[i] = out[i] + this->operator[]({i, j});
                         }
                     }
@@ -825,22 +846,6 @@ struct BroadcastOp : public GradFn {
             Tensor grad_a(inputs[0]->data.size());
             Tensor grad_b(inputs[1]->data.size());
 
-            Tensor tmp1 = Tensor(inputs[1], true).transpose();
-            Tensor tmp2 = Tensor(inputs[0], true).transpose();
-            Tensor tmp3 = Tensor(output.grad, output.shape_, true);
-            for(int i = 0; i < tmp2.shape()[0]; ++i) {
-                std::cout << "\n";
-                for(int j = 0; j < tmp2.shape()[1]; ++j) {
-                    std::cout << tmp2[{i, j}] << " ";
-                }
-            }
-            for(int i = 0; i < tmp3.shape()[0]; ++i) {
-                std::cout << "\n";
-                for(int j = 0; j < tmp3.shape()[1]; ++j) {
-                    std::cout << tmp3[{i, j}] << " ";
-                }
-            }
-
             grad_a = Tensor::matmul(Tensor(output.grad, output.shape_, true), Tensor(inputs[1], true).transpose());
             grad_b = Tensor::matmul(Tensor(inputs[0], true).transpose(), Tensor(output.grad, output.shape_, true));
 
@@ -882,7 +887,8 @@ struct BroadcastOp : public GradFn {
         }
 
         void BroadcastOp::backward(TensorImpl& output) {
-            Tensor grad_output(output);
+            Tensor grad_output(output.grad);
+            grad_output.reshape_as(output);
 
             Tensor reduced = reduce_sum_to_shape(grad_output, input_shape);
 
@@ -894,7 +900,6 @@ struct BroadcastOp : public GradFn {
 
     struct Layer {
         virtual void forward(const Tensor &input, Tensor &output) = 0;
-        virtual void backward(const Tensor &grad_output, Tensor &grad_input) = 0;
         virtual std::string to_string() const = 0;
         virtual std::vector<Tensor *> parameters() = 0;
         virtual ~Layer() {}
@@ -904,7 +909,7 @@ struct BroadcastOp : public GradFn {
         Tensor weight;
         Tensor bias;
 
-        Linear(size_t in_features, size_t out_features) : weight({in_features, out_features}, true), bias(true) {
+        Linear(size_t in_features, size_t out_features) : weight({in_features, out_features}, true), bias({out_features}, true) {
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_real_distribution<float> dis(-0.1f, 0.1f);
@@ -932,34 +937,6 @@ struct BroadcastOp : public GradFn {
             } else {
                 output = Tensor::matmul(input, weight) + bias;
             }
-
-        }
-        void backward(const Tensor &output, Tensor &input) override {
-            #if 0
-            size_t in_features = weight.dim(0);
-            size_t out_features = weight.dim(1);
-            size_t batch_size = output.dim(0);
-
-            // input.resize_grad();
-            // weight.resize_grad();
-            // bias.resize_grad();
-
-            for(size_t i = 0; i < batch_size; ++i) {
-                for(size_t j = 0; j < in_features; ++j) {
-                    input.grad[i * in_features + j] = 0;
-                    for(size_t k = 0; k < out_features; ++k) {
-                        input.grad[i * in_features + j] += output.grad[i * out_features + k] * weight.data[j * out_features + k];
-                        weight.grad[j * out_features + k] += output.grad[i * out_features + k] * input.data[i * in_features + j];
-                    }
-                }
-            }
-
-            for(size_t i = 0; i < batch_size; ++i) {
-                for(size_t k = 0; k < out_features; ++k) {
-                    bias.grad[k] += output.grad[i * out_features + k];
-                }
-            }
-            #endif
         }
 
         std::string to_string() const override {
@@ -977,50 +954,33 @@ struct BroadcastOp : public GradFn {
             output = Tensor::max(0.0f, input);
         }
 
-        void backward(const Tensor &output, Tensor &input) override {
-            #if 0
-            for(size_t i = 0; i < output.data.size(); ++i) {
-                input.grad[i] = (output.data[i] > 0) ? output.grad[i] : 0;
-            }
-            #endif
-        }
-
         std::string to_string() const override { return "ReLU()"; }
     };
 
     struct Model {
-        std::vector<Layer *> layers;
-        std::vector<Tensor> activations;
+        std::vector<Layer*> layers;
 
-        void add_layer(Layer *layer) { layers.push_back(layer); }
+        void add_layer(Layer* layer) {
+            layers.push_back(layer);
+        }
 
-        void forward(const Tensor &input, Tensor &output) {
-            activations.resize(layers.size() - 1);
-
-            const Tensor *current = &input;
-            for(size_t i = 0; i < layers.size(); ++i) {
-                Tensor *next = (i == layers.size() - 1) ? &output : &activations[i];
-                layers[i]->forward(*current, *next);
+        Tensor forward(const Tensor& input) {
+            Tensor current = input;
+            for (Layer* layer : layers) {
+                Tensor next;
+                layer->forward(current, next);
                 current = next;
             }
+            return current;
         }
 
-        void backward(const Tensor &output, Tensor &input) {
-            if(activations.size() != layers.size() - 1) {
-                throw std::runtime_error("Forward pass must be called before backward pass");
-            }
-
-            const Tensor *current = &output;
-            for(int i = layers.size() - 1; i >= 0; --i) {
-                Tensor *prev = (i > 0) ? &activations[i - 1] : &input;
-                layers[i]->backward(*current, *prev);
-                current = prev;
-            }
+        void backward(const Tensor& output) {
+            output.backward();
         }
 
-        std::vector<Tensor *> parameters() {
-            std::vector<Tensor *> params;
-            for(Layer *layer : layers) {
+        std::vector<Tensor*> parameters() {
+            std::vector<Tensor*> params;
+            for (Layer* layer : layers) {
                 auto layer_params = layer->parameters();
                 params.insert(params.end(), layer_params.begin(), layer_params.end());
             }
@@ -1029,14 +989,14 @@ struct BroadcastOp : public GradFn {
 
         std::string to_string() const {
             std::stringstream ss;
-            for(Layer *layer : layers) {
+            for (Layer* layer : layers) {
                 ss << layer->to_string() << "\n";
             }
             return ss.str();
         }
 
         ~Model() {
-            for(Layer *layer : layers) {
+            for (Layer* layer : layers) {
                 delete layer;
             }
         }

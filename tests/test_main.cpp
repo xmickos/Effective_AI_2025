@@ -3,12 +3,12 @@
 
 using namespace ttie;
 
-TEST(TensorTest, DISABLED_UninitializedTensor) {
+TEST(TensorTest, UninitializedTensor) {
     Tensor x;
     EXPECT_TRUE(x.empty());
 }
 
-TEST(TensorTest, DISABLED_BasicOps) {
+TEST(TensorTest, BasicOps) {
     Tensor a(std::vector<float>({1, 2, 3, 4}));
     Tensor b(std::vector<float>({1, 2, 3, 4}));
     a.reshape({1, 2, 2});
@@ -17,7 +17,7 @@ TEST(TensorTest, DISABLED_BasicOps) {
     EXPECT_THROW(a + b, std::exception);
 }
 
-TEST(TensorTest, DISABLED_InitializeAndSetData) {
+TEST(TensorTest, InitializeAndSetData) {
     Tensor t;
     t.reshape({2, 3});
 
@@ -43,7 +43,7 @@ TEST(TensorTest, DISABLED_GradientOperations) {
 }
 #endif
 
-TEST(LayerTest, DISABLED_ReLU) {
+TEST(LayerTest, ReLU) {
     ReLU relu;
     EXPECT_EQ(relu.parameters().size(), 0);
 
@@ -80,7 +80,7 @@ TEST(LayerTest, DISABLED_ReLU) {
     }
 }
 
-TEST(LayerTest, DISABLED_Linear) {
+TEST(LayerTest, Linear) {
     Linear linear(3, 2);
 
     auto params = linear.parameters();
@@ -119,7 +119,7 @@ TEST(LayerTest, DISABLED_Linear) {
     bool has_nonzero = false;
     auto inp_grad = input.get_grad();
     for (size_t i = 0; i < input.size(); ++i) {
-        if(std::abs(inp_grad[i]) < 1e-5) {
+        if(std::abs(inp_grad[i]) > 1e-5) {
             has_nonzero = true;
             break;
         }
@@ -182,23 +182,11 @@ TEST(LayerTest, LinearVSTorch) {
     linear.weight.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     linear.weight.reshape({3, 2});
     linear.bias.init({0.1f, 0.2f});
-    linear.bias.reshape({2});
 
     Tensor input;
     input.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     input.reshape({2, 3});
 
-    Tensor w(true);
-    w.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
-    w.reshape({3, 2});
-    w.transpose();
-
-    for(int i = 0; i < w.shape()[0]; ++i) {
-        std::cout << "\n";
-        for(int j = 0; j < w.shape()[1]; ++j) {
-            std::cout << w[{i, j}] << " ";
-        }
-    }
 
     // Forward pass
     Tensor output;
@@ -246,7 +234,7 @@ TEST(LayerTest, LinearVSTorch) {
     EXPECT_NEAR(bias_grad[1], 2.0f, 1e-5f);
 }
 
-TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
+TEST(ModelTest, ForwardAndBackwardVSTorch) {
     /* Pytorch reference
     import torch
 
@@ -301,23 +289,25 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     model.add_layer(new ReLU());
     model.add_layer(new Linear(2, 1));
 
-    // Initialize with the same values as in PyTorch reference
     Linear* layer1 = static_cast<Linear*>(model.layers[0]);
-    layer1->weight = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-    layer1->bias = {0.1f, 0.2f};
+    layer1->weight.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+    layer1->weight.reshape({3, 2});
+    layer1->bias.init({0.1f, 0.2f});
 
     Linear* layer2 = static_cast<Linear*>(model.layers[2]);
-    layer2->weight = {0.7f, 0.8f};
-    layer2->bias = {0.3f};
+    layer2->weight.init({0.7f, 0.8f});
+    layer2->weight.reshape({2, 1});
+    layer2->bias.init({0.3f});
 
-    // Prepare input
-    Tensor input;
+    Tensor input(true);
+    input.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     input.reshape({2, 3});
-    input = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
 
-    // Forward pass
-    Tensor output;
-    model.forward(input, output);
+    Tensor output = model.forward(input);
+
+    output.backward();
+
+    auto params = model.parameters();
 
     // Verify final output shape and values
     ASSERT_EQ(output.shape().size(), 2);
@@ -325,11 +315,6 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     ASSERT_EQ(output.shape()[1], 1);
     EXPECT_NEAR(output[0], 0.9080f, 1e-4f);
     EXPECT_NEAR(output[1], 1.3850f, 1e-4f);
-
-    // Backward pass
-    // output.grad = {1.0f, 1.0f};
-
-    model.backward(output, input);
 
     // Check input gradients
     auto input_grad = input.get_grad();
