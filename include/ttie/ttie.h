@@ -10,8 +10,8 @@
 
 namespace ttie {
 
-    class Tensor;
     struct TensorImpl;
+    class Tensor;
     struct GradFn {
         std::vector<std::shared_ptr<TensorImpl>> inputs;
 
@@ -29,7 +29,7 @@ namespace ttie {
         size_t ndims;
         bool requires_grad = false;
 
-        TensorImpl() {}
+        TensorImpl() : strides({1}), ndims(1) {}
 
         TensorImpl(std::initializer_list<float> lst_) : data(lst_) {
             shape_ = {lst_.size()};
@@ -40,14 +40,21 @@ namespace ttie {
 
         TensorImpl(std::initializer_list<int> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
         shape_.end()), shape_(shape_.begin(), shape_.end()), requires_grad(requires_grad_) {
-            int total_size = std::accumulate(shape_.begin(), shape_.end(), 0);
+            int total_size = std::accumulate(shape_.begin(), shape_.end(), 1, std::multiplies<size_t>());
             data.resize(total_size);
+            for(int i = 0; i < shape_.size() - 1; ++i) {
+                strides[i] = std::accumulate(std::next(shape_.begin(), i + 1), shape_.end(), 1, std::multiplies<size_t>());
+            }
+            strides.back() = 1;
         }
 
         TensorImpl(std::initializer_list<size_t> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
         shape_.end()), shape_(shape_.begin(), shape_.end()), requires_grad(requires_grad_) {
-            int total_size = std::accumulate(shape_.begin(), shape_.end(), 0);
+            int total_size = std::accumulate(shape_.begin(), shape_.end(), 1, std::multiplies<size_t>());
             data.resize(total_size);
+            for(int i = 0; i < shape_.size() - 1; ++i) {
+                strides[i] = std::accumulate(std::next(shape_.begin(), i + 1), shape_.end(), 1, std::multiplies<size_t>());
+            }
         }
 
         void backward() {
@@ -249,6 +256,35 @@ namespace ttie {
         std::string typestr() const noexcept override { return "DivOp"; }
     };
 
+    struct MatrixMatrixProdOp final : public GradFn {
+        MatrixMatrixProdOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+
+        void backward(TensorImpl& output) override;
+        std::string typestr() const noexcept override { return "MatrixMatrixProdOp"; }
+    };
+
+    struct MatrixVectorProdOp final : public GradFn {
+        MatrixVectorProdOp(const std::shared_ptr<TensorImpl>& a, const std::shared_ptr<TensorImpl>& b) : GradFn({a, b}) {}
+
+        void backward(TensorImpl& output) override;
+        std::string typestr() const noexcept override { return "MatrixVectorProdOp"; }
+    };
+
+struct BroadcastOp : public GradFn {
+    std::vector<size_t> input_shape;
+    std::vector<size_t> target_shape;
+
+    // BroadcastOp(const std::vector<size_t>& input_shape_, const std::vector<size_t>& target_shape_)
+    BroadcastOp(std::shared_ptr<TensorImpl> a, const std::vector<size_t>& input_shape_, const std::vector<size_t>& target_shape_)
+        : GradFn({a}), input_shape(input_shape_), target_shape(target_shape_) {}
+
+    void backward(TensorImpl& output) override;
+
+    std::string typestr() const noexcept override { return "BroadcastOp"; }
+
+};
+
+
     template <typename T>
     static std::string vector_to_string(const std::vector<T> &vec, size_t limit = 5) {
         std::stringstream ss;
@@ -283,6 +319,15 @@ namespace ttie {
                 impl_->requires_grad = requires_grad_;
             }
 
+            Tensor(const std::vector<float>& data_,  std::vector<size_t> shape, bool requires_grad_=false) : impl_(new TensorImpl) {
+                impl_->data = data_;
+                impl_->ndims = shape.size();
+                impl_->strides.resize(impl_->ndims);
+                std::fill(impl_->strides.begin(), impl_->strides.end(), 1);
+                impl_->shape_ = shape;
+                impl_->requires_grad = requires_grad_;
+            }
+
             Tensor(std::initializer_list<float>& data_, bool requires_grad_=false) : impl_(new TensorImpl) {
                 impl_->data.assign(data_);
                 impl_->ndims = 1;
@@ -292,9 +337,28 @@ namespace ttie {
                 impl_->requires_grad = requires_grad_;
             }
 
-            Tensor(std::initializer_list<int> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) { }
+            Tensor(std::initializer_list<int> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) {}
 
-            Tensor(std::initializer_list<size_t> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) { }
+            Tensor(std::initializer_list<size_t> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) {}
+
+            Tensor(const TensorImpl& impl) {
+                impl_ = std::make_shared<TensorImpl>(impl);
+            }
+
+            Tensor(const std::shared_ptr<TensorImpl>& impl, bool deep_copy=false) {
+                if(deep_copy) {
+                    impl_ = std::make_shared<TensorImpl>(*impl);
+                } else {
+                    impl_ = impl;
+                }
+            }
+
+            void init(std::initializer_list<float> data_) {
+                if(!empty() && data_.size() != size()) {
+                    throw std::invalid_argument("Can't initialize tensor of size " + std::to_string(size()) + " with data which size is " + std::to_string(data_.size()));
+                }
+                impl_->data = data_;
+            }
 
             Tensor operator=(std::initializer_list<float> list) {
                 Tensor tmp(list);
@@ -351,6 +415,7 @@ namespace ttie {
 
                 impl_->shape_ = new_shape;
                 impl_->strides.resize(new_shape.size());
+                impl_->strides.back() = 1;
                 impl_->ndims = new_shape.size();
 
                 for(int i = 0; i < impl_->shape_.size() - 1; ++i) {
@@ -367,10 +432,17 @@ namespace ttie {
             float& operator[](int i) { return impl_->data[i]; }
             const float& operator[](int i) const { return impl_->data[i]; }
 
-            float& operator[](const std::initializer_list<size_t>& idx) {
+            float& operator[](std::initializer_list<size_t> idx) {
                 return impl_->data[compute_index(idx)];
             }
-            const float& operator[](const std::initializer_list<size_t>& idx) const {
+            const float& operator[](std::initializer_list<size_t> idx) const {
+                return impl_->data[compute_index(idx)];
+            }
+
+            float& operator[](std::initializer_list<int> idx) {
+                return impl_->data[compute_index(idx)];
+            }
+            const float& operator[](std::initializer_list<int> idx) const {
                 return impl_->data[compute_index(idx)];
             }
 
@@ -429,11 +501,19 @@ namespace ttie {
                 return std::inner_product(impl_->strides.begin(), impl_->strides.end(), idx.begin(), 0);
             }
 
+            int compute_index(const std::initializer_list<int>& idx) const {
+                if(std::equal(impl_->shape_.begin(), impl_->shape_.end(), idx.begin(), std::less<float>())) {
+                    throw std::invalid_argument("Invalid indexes for tensor of shape" + vector_to_string(impl_->shape_));
+                }
+
+                return std::inner_product(impl_->strides.begin(), impl_->strides.end(), idx.begin(), 0);
+            }
+
         public:
             size_t size() const {
                 if(empty()) { return 0; }
 
-                return std::accumulate(impl_->shape_.begin(), impl_->shape_.end(), 1, std::multiplies<size_t>());
+                return impl_->data.size();
             }
 
             void zero_grad() {
@@ -448,7 +528,8 @@ namespace ttie {
 
             Tensor operator+(const Tensor& rhs) {
                 if(size() != rhs.size() || !std::equal(impl_->shape_.begin(), impl_->shape_.end(), rhs.impl_->shape_.begin())) {
-                    throw std::invalid_argument("Can't apply operator+() for tensors of shape " + std::to_string(size()) + " and " + std::to_string(rhs.size()));
+                    throw std::invalid_argument("Can't apply operator+() for tensors of shape (" + std::to_string(impl_->shape_[0]) + ", " + \
+                        std::to_string(impl_->shape_[1]) + ") and (" + std::to_string(rhs.shape()[0]) + ", " + std::to_string(rhs.shape()[1]) + ").");
                 }
                 Tensor tmp;
                 tmp.impl_ = std::make_shared<TensorImpl>(*impl_);
@@ -550,6 +631,21 @@ namespace ttie {
                 return c;
             }
 
+            Tensor& transpose() {
+                if(impl_->ndims != 2) {
+                    throw std::invalid_argument("Invalid tensor shape for transpose: (" + std::to_string(shape()[0]) + ", " + std::to_string(shape()[1]) + ").");
+                }
+                for(int i = 0; i < impl_->shape_[0]; ++i) {
+                    for(int j = 0; j <= i; ++j) {
+                        std::swap(this->operator[]({i, j}), this->operator[]({j, i}));
+                    }
+                }
+
+                std::swap(impl_->shape_[0], impl_->shape_[1]);
+
+                return *this;
+            }
+
             static Tensor matrix_matrix_product(const Tensor& a, const Tensor& b) {
                 int M = a.shape()[0], N = a.shape()[1], K = b.shape()[1];
                 if(N != b.shape()[0]) {
@@ -557,23 +653,67 @@ namespace ttie {
                         std::to_string(N) + ") and (" + std::to_string(b.shape()[0]) + ", " + std::to_string(K) + ")."
                     );
                 }
-                Tensor c({M, N});
-                std::vector<float> fixed_col(K);
+                Tensor c({M, K});
+                c.impl_->requires_grad = a.requires_grad() || b.requires_grad();
+                std::vector<float> fixed_col(N);
 
-                for(size_t i = 0; i < N; ++i) {
-                    for(size_t q = 0; q < K; ++q) {
+                for(size_t i = 0; i < K; ++i) {
+                    for(size_t q = 0; q < N; ++q) {
                         fixed_col[q] = b[{q, i}];
                     }
-                    for(size_t j = 0; j < N; ++j) {
+                    for(size_t j = 0; j < M; ++j) {
                         c[{j, i}] = std::transform_reduce(
-                            std::next(a.impl_->data.begin(), j * M),
-                            std::next(a.impl_->data.begin(), (j + 1) * M),
+                            std::next(a.impl_->data.begin(), j * N),
+                            std::next(a.impl_->data.begin(), (j + 1) * N),
                             fixed_col.begin(), 0.0f
                         );
                     }
                 }
-
+                c.set_grad(std::make_shared<MatrixMatrixProdOp>(a.impl_, b.impl_));
                 return c;
+            }
+
+            Tensor broadcast_to(const std::vector<size_t>& target_shape) const {
+                if(shape() == target_shape) {
+                    return *this;
+                }
+                if(ndims() > 1) {
+                    throw std::invalid_argument("Can't broadcast tensor with ndims > 1");
+                }
+
+                Tensor out = Tensor(impl_, true);
+                std::vector<size_t> old_shape = shape();
+                size_t new_sz = std::reduce(target_shape.begin(), target_shape.end(), 1, std::multiplies<size_t>());
+                out.impl_->shape_ = target_shape;
+                out.impl_->data.resize(new_sz);
+                out.impl_->strides.resize(target_shape.size());
+                for(int i = 0; i < out.impl_->shape_.size() - 1; ++i) {
+                    out.impl_->strides[i] = std::accumulate(std::next(out.impl_->shape_.begin(), i + 1), out.impl_->shape_.end(), 1, std::multiplies<size_t>());
+                }
+                out.impl_->strides.back() = 1;
+
+                if(old_shape[0] == target_shape[1]) {
+                    for(int i = 1; i < old_shape[0]; ++i) {
+                        for(int j = 0; j < target_shape[1]; ++j) {
+                            out[{i, j}] = impl_->data[j];
+                        }
+                    }
+                } else if (old_shape[0] == target_shape[0]) {
+                    for(int i = 1; i < old_shape[0]; ++i) {
+                        for(int j = 0; j < target_shape[1]; ++j) {
+                            out[{j, i}] = impl_->data[j];
+                        }
+                    }
+                }
+
+                if(requires_grad()) {
+                    out.impl_->requires_grad = true;
+                    auto grad_fn = std::make_shared<BroadcastOp>(impl_, old_shape, target_shape);
+                    grad_fn->inputs = { impl_ };
+                    out.impl_->grad_fn = grad_fn;
+                }
+
+                return out;
             }
 
             static Tensor matrix_vector_product(const Tensor& a, const Tensor& b) {
@@ -593,7 +733,7 @@ namespace ttie {
                         0.0f
                     );
                 }
-
+                c.set_grad(std::make_shared<MatrixVectorProdOp>(a.impl_, b.impl_));
                 return c;
             }
 
@@ -613,6 +753,38 @@ namespace ttie {
             }
 
             void reshape_as(const Tensor& arg) { reshape(arg.shape()); }
+
+            Tensor sum(size_t axis) const {
+                if(ndims() > 2) {
+                    throw std::invalid_argument("Can't apply sum() for tensor with ndims > 2");
+                }
+                if(axis > size()) {
+                    throw std::invalid_argument("Can't find axis " + std::to_string(axis) + " in tensor");
+                }
+
+                Tensor out_;
+                size_t m = shape()[0], n = shape()[1];
+
+                if(axis == 0) {
+                    Tensor out({n});
+                    for(size_t i = 0; i < m; ++i) {
+                        for(size_t j = 0; j < n; ++j) {
+                            out[i] = out[i] + this->operator[]({i, j});
+                        }
+                    }
+                    out_ = out;
+                } else {
+                    Tensor out({m});
+                    for(size_t i = 0; i < m; ++i) {
+                        for(size_t j = 0; j < n; ++j) {
+                            out[i] = out[i] + this->operator[]({j, i});
+                        }
+                    }
+                    out_ = out;
+                }
+
+                return out_;
+            }
 
 
             friend std::ostream &operator<<(std::ostream &os, const Tensor &t) {
@@ -646,6 +818,61 @@ namespace ttie {
             }
     };
 
+    void MatrixMatrixProdOp::backward(TensorImpl& output) { // C = A @ B.
+            Tensor grad_a(inputs[0]->data.size());
+            Tensor grad_b(inputs[1]->data.size());
+
+            grad_a = Tensor::matmul(Tensor(output.grad, output.shape_, true), Tensor(inputs[1], true).transpose());
+            grad_b = Tensor::matmul(Tensor(inputs[0], true).transpose(), Tensor(output.grad, output.shape_, true));
+
+            std::vector<float> final_grad_a = grad_a.get_data();
+            std::vector<float> final_grad_b = grad_b.get_data();
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+        }
+
+    void MatrixVectorProdOp::backward(TensorImpl& output) { // C = A @ b.
+            Tensor grad_a(inputs[0]->data.size());
+            Tensor grad_b(inputs[1]->data.size());
+
+            grad_a = Tensor::matmul(Tensor(output), Tensor(inputs[1], true).transpose());
+            grad_b = Tensor::matmul(Tensor(inputs[0], true).transpose(), Tensor(output));
+
+            std::vector<float> final_grad_a = grad_a.get_data();
+            std::vector<float> final_grad_b = grad_b.get_data();
+
+            inputs[0]->accumulate_grad(final_grad_a);
+            inputs[1]->accumulate_grad(final_grad_b);
+
+            inputs[0]->backward();
+            inputs[1]->backward();
+        }
+
+        Tensor reduce_sum_to_shape(const Tensor& input, const std::vector<size_t>& target_shape) {
+            Tensor output = input;
+            for (size_t i = 0; i < input.shape().size(); ++i) {
+                if (i >= target_shape.size() || input.shape()[i] != target_shape[i]) {
+                    output = output.sum(i);
+                }
+            }
+            return output;
+        }
+
+        void BroadcastOp::backward(TensorImpl& output) {
+            Tensor grad_output(output);
+
+            Tensor reduced = reduce_sum_to_shape(grad_output, input_shape);
+
+            inputs[0]->accumulate_grad(reduced.get_data());
+
+            inputs[0]->backward();
+        }
+
+
     struct Layer {
         virtual void forward(const Tensor &input, Tensor &output) = 0;
         virtual void backward(const Tensor &grad_output, Tensor &grad_input) = 0;
@@ -658,12 +885,10 @@ namespace ttie {
         Tensor weight;
         Tensor bias;
 
-        Linear(size_t in_features, size_t out_features) : weight(true), bias(true) {
+        Linear(size_t in_features, size_t out_features) : weight({in_features, out_features}, true), bias(true) {
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_real_distribution<float> dis(-0.1f, 0.1f);
-
-            weight.reshape({in_features, out_features});
 
             for(size_t i = 0; i < in_features * out_features; ++i) {
                 weight[i] = dis(gen);
@@ -683,15 +908,12 @@ namespace ttie {
             size_t out_features = weight.shape()[1];
             output.reshape({input.dim(0), out_features});
 
-            // for(size_t i = 0; i < input.dim(0); ++i) {
-            //     for(size_t j = 0; j < out_features; ++j) {
-            //         output[i * out_features + j] = bias[j];
-            //         for(size_t k = 0; k < in_features; ++k) {
-            //             output[i * out_features + j] += input[i * in_features + k] * weight[k * out_features + j];
-            //         }
-            //     }
-            // }
-            output = Tensor::matmul(input, weight);
+            if(input.ndims() == 2) {
+                output = Tensor::matmul(input, weight) + bias.broadcast_to({input.shape()[0], out_features});
+            } else {
+                output = Tensor::matmul(input, weight) + bias;
+            }
+
         }
         void backward(const Tensor &output, Tensor &input) override {
             #if 0
