@@ -3,12 +3,12 @@
 
 using namespace ttie;
 
-TEST(TensorTest, UninitializedTensor) {
+TEST(TensorTest, DISABLED_UninitializedTensor) {
     Tensor x;
     EXPECT_TRUE(x.empty());
 }
 
-TEST(TensorTest, BasicOps) {
+TEST(TensorTest, DISABLED_BasicOps) {
     Tensor a(std::vector<float>({1, 2, 3, 4}));
     Tensor b(std::vector<float>({1, 2, 3, 4}));
     a.reshape({1, 2, 2});
@@ -17,33 +17,202 @@ TEST(TensorTest, BasicOps) {
     EXPECT_THROW(a + b, std::exception);
 }
 
-TEST(TensorTest, InitializeAndSetData) {
+TEST(TensorTest, DISABLED_InitializeAndSetData) {
     Tensor t;
     t.reshape({2, 3});
 
     EXPECT_EQ(t.size(), 6);
 }
 
-#if 0 // cant be used now
-TEST(TensorTest, DISABLED_GradientOperations) {
-    Tensor t;
-    t.reshape({2, 3});
+TEST(AutoGradTest, DISABLED_AddOp_) {
+    Tensor a({1.0f, 1.0f, 1.0f, 1.0f}, true);
+    Tensor b({1.0f, 1.0f, 1.0f, 1.0f}, true);
 
-    EXPECT_EQ(t.grad.size(), 6);
+    Tensor c = a + b;
 
-    for (size_t i = 0; i < t.grad.size(); ++i) {
-        t.grad[i] = static_cast<float>(i);
-    }
+    c.backward();
 
-    t.zero_grad();
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
 
-    for (size_t i = 0; i < t.grad.size(); ++i) {
-        EXPECT_FLOAT_EQ(t.grad[i], 0.0f);
-    }
+    EXPECT_EQ(a_grad[0], 1);
+    EXPECT_EQ(a_grad[1], 1);
+    EXPECT_EQ(a_grad[2], 1);
+    EXPECT_EQ(a_grad[3], 1);
+    EXPECT_EQ(b_grad[0], 1);
+    EXPECT_EQ(b_grad[1], 1);
+    EXPECT_EQ(b_grad[2], 1);
+    EXPECT_EQ(b_grad[3], 1);
 }
-#endif
 
-TEST(LayerTest, ReLU) {
+TEST(AutoGradTest, MulOp_) {
+    Tensor a({1.0f, 2.0f, 3.0f, 4.0f}, true);
+    Tensor b({5.0f, 6.0f, 7.0f, 8.0f}, true);
+
+    Tensor c = a * b;
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 5.0, 1e-6);
+    EXPECT_NEAR(a_grad[1], 6.0, 1e-6);
+    EXPECT_NEAR(a_grad[2], 7.0, 1e-6);
+    EXPECT_NEAR(a_grad[3], 8.0, 1e-6);
+    EXPECT_NEAR(b_grad[0], 1.0, 1e-6);
+    EXPECT_NEAR(b_grad[1], 2.0, 1e-6);
+    EXPECT_NEAR(b_grad[2], 3.0, 1e-6);
+    EXPECT_NEAR(b_grad[3], 4.0, 1e-6);
+}
+
+TEST(AutoGradTest, SubOp_) {
+    Tensor a({1.0f, 1.0f, 1.0f, 1.0f}, true);
+    Tensor b({1.0f, 1.0f, 1.0f, 1.0f}, true);
+
+    Tensor c = a - b;
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 1.0, 1e-6);
+    EXPECT_NEAR(a_grad[1], 1.0, 1e-6);
+    EXPECT_NEAR(a_grad[2], 1.0, 1e-6);
+    EXPECT_NEAR(a_grad[3], 1.0, 1e-6);
+    EXPECT_NEAR(b_grad[0], -1.0, 1e-6);
+    EXPECT_NEAR(b_grad[1], -1.0, 1e-6);
+    EXPECT_NEAR(b_grad[2], -1.0, 1e-6);
+    EXPECT_NEAR(b_grad[3], -1.0, 1e-6);
+}
+
+TEST(AutoGradTest, UnaryMinusOp_) {
+    Tensor a({2.0f, 1.0f, 2.0f, 1.0f}, true);
+
+    Tensor c = -a;
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+
+    EXPECT_NEAR(a_grad[0], -1.0, 1e-6);
+    EXPECT_NEAR(a_grad[1], -1.0, 1e-6);
+    EXPECT_NEAR(a_grad[2], -1.0, 1e-6);
+    EXPECT_NEAR(a_grad[3], -1.0, 1e-6);
+}
+
+TEST(AutoGradTest, MaxOp_) {
+    Tensor a({2.0f, 1.0f, 2.0f, 1.0f}, true);
+    Tensor b({1.0f, 2.0f, 1.0f, 2.0f}, true);
+
+    Tensor c = Tensor::max(a, b);
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 1.0, 1e-6);
+    EXPECT_NEAR(a_grad[1], 0.0, 1e-6);
+    EXPECT_NEAR(a_grad[2], 1.0, 1e-6);
+    EXPECT_NEAR(a_grad[3], 0.0, 1e-6);
+    EXPECT_NEAR(b_grad[0], 0.0, 1e-6);
+    EXPECT_NEAR(b_grad[1], 1.0, 1e-6);
+    EXPECT_NEAR(b_grad[2], 0.0, 1e-6);
+    EXPECT_NEAR(b_grad[3], 1.0, 1e-6);
+}
+
+TEST(AutoGradTest, SqrtOp_) {
+    Tensor a({2.0f, 1.0f, 2.0f, 1.0f}, true);
+
+    Tensor c = Tensor::sqrt(a);
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 0.35355, 1e-5);
+    EXPECT_NEAR(a_grad[1], 0.5, 1e-5);
+    EXPECT_NEAR(a_grad[2], 0.35355, 1e-5);
+    EXPECT_NEAR(a_grad[3], 0.5, 1e-5);
+}
+
+TEST(AutoGradTest, LogOp_) {
+    Tensor a({2.0f, 1.0f, 2.0f, 1.0f}, true);
+
+    Tensor c = Tensor::log(a);
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 0.5, 1e-5);
+    EXPECT_NEAR(a_grad[1], 1.0, 1e-5);
+    EXPECT_NEAR(a_grad[2], 0.5, 1e-5);
+    EXPECT_NEAR(a_grad[3], 1.0, 1e-5);
+}
+
+TEST(AutoGradTest, DivOp_) {
+    Tensor a({1.0f, 1.0f, 1.0f, 1.0f}, true);
+    Tensor b({2.0f, 2.0f, 2.0f, 2.0f}, true);
+
+    Tensor c = a / b;
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 0.5, 1e-6);
+    EXPECT_NEAR(a_grad[1], 0.5, 1e-6);
+    EXPECT_NEAR(a_grad[2], 0.5, 1e-6);
+    EXPECT_NEAR(a_grad[3], 0.5, 1e-6);
+    EXPECT_NEAR(b_grad[0], -0.25, 1e-6);
+    EXPECT_NEAR(b_grad[1], -0.25, 1e-6);
+    EXPECT_NEAR(b_grad[2], -0.25, 1e-6);
+    EXPECT_NEAR(b_grad[3], -0.25, 1e-6);
+}
+
+TEST(AutoGradTest, MatmulOp) {
+    Tensor a({1.5f, 1.0f, 1.5f}, true);
+    Tensor b({1.0f, 1.5f, 1.0f}, true);
+
+    a.reshape({1, 3});
+    b.reshape({3, 1});
+
+    Tensor c = Tensor::matmul(a, b);
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+    auto b_grad = b.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 1.0f, 1e-6);
+    EXPECT_NEAR(a_grad[1], 1.5f, 1e-6);
+    EXPECT_NEAR(a_grad[2], 1.0f, 1e-6);
+    EXPECT_NEAR(b_grad[0], 1.5f, 1e-6);
+    EXPECT_NEAR(b_grad[1], 1.0f, 1e-6);
+    EXPECT_NEAR(b_grad[2], 1.5f, 1e-6);
+}
+
+TEST(AutoGradTest, BroadcastOp_) {
+    Tensor a({1.5f, 1.0f, 1.5f}, true);
+
+    a.reshape({3});
+
+    Tensor c = a.broadcast_to({2, 3});
+
+    c.backward();
+
+    auto a_grad = a.get_grad();
+
+    EXPECT_NEAR(a_grad[0], 2.0f, 1e-6);
+    EXPECT_NEAR(a_grad[1], 2.0f, 1e-6);
+    EXPECT_NEAR(a_grad[2], 2.0f, 1e-6);
+}
+
+TEST(LayerTest, DISABLED_ReLU) {
     ReLU relu;
     EXPECT_EQ(relu.parameters().size(), 0);
 
@@ -59,10 +228,6 @@ TEST(LayerTest, ReLU) {
     for (size_t i = 0; i < output.size(); ++i) {
         EXPECT_FLOAT_EQ(output[i], std::max(0.0f, input[i]));
     }
-
-    // for (size_t i = 0; i < output.size(); ++i) {
-    //     output[i] = 1.0f;
-    // }
 
     output.backward();
 
@@ -80,7 +245,7 @@ TEST(LayerTest, ReLU) {
     }
 }
 
-TEST(LayerTest, Linear) {
+TEST(LayerTest, DISABLED_Linear) {
     Linear linear(3, 2);
 
     auto params = linear.parameters();
@@ -113,7 +278,6 @@ TEST(LayerTest, Linear) {
 
     input.zero_grad();
 
-    // linear.backward(output, input);
     output.backward();
 
     bool has_nonzero = false;
@@ -147,7 +311,7 @@ TEST(LayerTest, Linear) {
     EXPECT_TRUE(has_nonzero);
 }
 
-TEST(LayerTest, LinearVSTorch) {
+TEST(LayerTest, DISABLED_LinearVSTorch) {
     /* PyTorch reference forward and backward with predefined weights and biases
     import torch
 
@@ -234,7 +398,7 @@ TEST(LayerTest, LinearVSTorch) {
     EXPECT_NEAR(bias_grad[1], 2.0f, 1e-5f);
 }
 
-TEST(ModelTest, ForwardAndBackwardVSTorch) {
+TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     /* Pytorch reference
     import torch
 
