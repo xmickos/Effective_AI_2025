@@ -3,12 +3,12 @@
 
 using namespace ttie;
 
-TEST(TensorTest, DISABLED_UninitializedTensor) {
+TEST(TensorTest, UninitializedTensor) {
     Tensor x;
     EXPECT_TRUE(x.empty());
 }
 
-TEST(TensorTest, DISABLED_BasicOps) {
+TEST(TensorTest, BasicOps) {
     Tensor a(std::vector<float>({1, 2, 3, 4}));
     Tensor b(std::vector<float>({1, 2, 3, 4}));
     a.reshape({1, 2, 2});
@@ -17,14 +17,14 @@ TEST(TensorTest, DISABLED_BasicOps) {
     EXPECT_THROW(a + b, std::exception);
 }
 
-TEST(TensorTest, DISABLED_InitializeAndSetData) {
+TEST(TensorTest, InitializeAndSetData) {
     Tensor t;
     t.reshape({2, 3});
 
     EXPECT_EQ(t.size(), 6);
 }
 
-TEST(AutoGradTest, DISABLED_AddOp_) {
+TEST(AutoGradTest, AddOp_) {
     Tensor a({1.0f, 1.0f, 1.0f, 1.0f}, true);
     Tensor b({1.0f, 1.0f, 1.0f, 1.0f}, true);
 
@@ -212,7 +212,7 @@ TEST(AutoGradTest, BroadcastOp_) {
     EXPECT_NEAR(a_grad[2], 2.0f, 1e-6);
 }
 
-TEST(LayerTest, DISABLED_ReLU) {
+TEST(LayerTest, ReLU) {
     ReLU relu;
     EXPECT_EQ(relu.parameters().size(), 0);
 
@@ -245,7 +245,7 @@ TEST(LayerTest, DISABLED_ReLU) {
     }
 }
 
-TEST(LayerTest, DISABLED_Linear) {
+TEST(LayerTest, Linear) {
     Linear linear(3, 2);
 
     auto params = linear.parameters();
@@ -311,7 +311,7 @@ TEST(LayerTest, DISABLED_Linear) {
     EXPECT_TRUE(has_nonzero);
 }
 
-TEST(LayerTest, DISABLED_LinearVSTorch) {
+TEST(LayerTest, LinearVSTorch) {
     /* PyTorch reference forward and backward with predefined weights and biases
     import torch
 
@@ -347,8 +347,7 @@ TEST(LayerTest, DISABLED_LinearVSTorch) {
     linear.weight.reshape({3, 2});
     linear.bias.init({0.1f, 0.2f});
 
-    Tensor input;
-    input.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+    Tensor input({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
     input.reshape({2, 3});
 
 
@@ -398,7 +397,7 @@ TEST(LayerTest, DISABLED_LinearVSTorch) {
     EXPECT_NEAR(bias_grad[1], 2.0f, 1e-5f);
 }
 
-TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
+TEST(ModelTest, ForwardAndBackwardVSTorch) {
     /* Pytorch reference
     import torch
 
@@ -463,8 +462,7 @@ TEST(ModelTest, DISABLED_ForwardAndBackwardVSTorch) {
     layer2->weight.reshape({2, 1});
     layer2->bias.init({0.3f});
 
-    Tensor input(true);
-    input.init({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f});
+    Tensor input({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}, true);
     input.reshape({2, 3});
 
     Tensor output = model.forward(input);

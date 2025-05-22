@@ -391,23 +391,40 @@ struct BroadcastOp : public GradFn {
                 impl_->grad_fn = node;
             }
 
-            Tensor& inplace_add(const Tensor& rhs) {
-                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::plus<float>());
+            Tensor& inplace_add(const Tensor& b) {
+                for(size_t i = 0; i < shape()[0]; ++i) {
+                    for(size_t j = 0; j < shape()[1]; ++j) {
+                        this->operator[]({i, j}) = this->operator[]({i, j}) + b[{i, j}];
+                    }
+                }
+
                 return *this;
             }
 
             Tensor& inplace_mul(const Tensor& rhs) {
-                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::multiplies<float>());
+                for(size_t i = 0; i < shape()[0]; ++i) {
+                    for(size_t j = 0; j < shape()[1]; ++j) {
+                        this->operator[]({i, j}) = this->operator[]({i, j}) * rhs[{i, j}];
+                    }
+                }
                 return *this;
             }
 
             Tensor& inplace_sub(const Tensor& rhs) {
-                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::minus<float>());
+                for(size_t i = 0; i < shape()[0]; ++i) {
+                    for(size_t j = 0; j < shape()[1]; ++j) {
+                        this->operator[]({i, j}) = this->operator[]({i, j}) - rhs[{i, j}];
+                    }
+                }
                 return *this;
             }
 
             Tensor& inplace_div(const Tensor& rhs) {
-                std::transform(impl_->data.begin(), impl_->data.end(), rhs.impl_->data.begin(), impl_->data.begin(), std::divides<float>());
+                for(size_t i = 0; i < shape()[0]; ++i) {
+                    for(size_t j = 0; j < shape()[1]; ++j) {
+                        this->operator[]({i, j}) = this->operator[]({i, j}) / rhs[{i, j}];
+                    }
+                }
                 return *this;
             }
 
@@ -532,7 +549,10 @@ struct BroadcastOp : public GradFn {
             size_t size() const {
                 if(empty()) { return 0; }
 
-                return impl_->data.size();
+                #if 0
+                    return impl_->data.size();
+                #endif
+                return std::accumulate(impl_->shape_.begin(), impl_->shape_.end(), 1, std::multiplies<size_t>());
             }
 
             void zero_grad() {
@@ -703,12 +723,10 @@ struct BroadcastOp : public GradFn {
                 }
 
                 Tensor out(impl_, requires_grad());
-
                 out.impl_->shape_ = target_shape;
-
                 out.impl_->strides = {0, 1};
 
-                if (requires_grad()) {
+                if(requires_grad()) {
                     auto grad_fn = std::make_shared<BroadcastOp>(impl_, shape(), target_shape);
                     grad_fn->inputs = {impl_};
                     out.impl_->grad_fn = grad_fn;
