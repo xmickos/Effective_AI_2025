@@ -60,6 +60,17 @@ namespace ttie {
             strides.back() = 1;
         }
 
+
+        explicit TensorImpl(std::vector<size_t> shape_, bool requires_grad_=false) : ndims(shape_.size()), strides(shape_.begin(),
+        shape_.end()), shape_(shape_.begin(), shape_.end()), requires_grad(requires_grad_) {
+            int total_size = std::accumulate(shape_.begin(), shape_.end(), 1, std::multiplies<size_t>());
+            data.resize(total_size);
+            for(int i = 0; i < shape_.size() - 1; ++i) {
+                strides[i] = std::accumulate(std::next(shape_.begin(), i + 1), shape_.end(), 1, std::multiplies<size_t>());
+            }
+            strides.back() = 1;
+        }
+
         void backward() {
             if(grad_fn) {
                 if(grad.empty()) {
@@ -78,6 +89,48 @@ namespace ttie {
                 std::transform(grad.begin(), grad.end(), grad_.begin(), grad.begin(), std::plus<float>());
             }
         }
+    };
+
+
+    struct SigmoidOp : public GradFn {
+        SigmoidOp(std::shared_ptr<TensorImpl> input) : GradFn({input}) {}
+
+        void backward(TensorImpl &output) override {
+            const std::vector<float> &out_data = output.data;
+            const std::vector<float> &grad_out = output.grad;
+            std::vector<float> grad_input(out_data.size());
+
+            for (size_t i = 0; i < out_data.size(); ++i) {
+                float s = out_data[i];
+                grad_input[i] = grad_out[i] * s * (1 - s);
+            }
+
+            inputs[0]->accumulate_grad(grad_input);
+            inputs[0]->backward();
+        }
+
+        std::string typestr() const noexcept override { return "SigmoidOp"; }
+    };
+
+
+    struct TanhOp : public GradFn {
+        TanhOp(std::shared_ptr<TensorImpl> input) : GradFn({input}) {}
+
+        void backward(TensorImpl &output) override {
+            const std::vector<float> &out_data = output.data;
+            const std::vector<float> &grad_out = output.grad;
+            std::vector<float> grad_input(out_data.size());
+
+            for (size_t i = 0; i < out_data.size(); ++i) {
+                float t = out_data[i];
+                grad_input[i] = grad_out[i] * (1 - t * t);
+            }
+
+            inputs[0]->accumulate_grad(grad_input);
+            inputs[0]->backward();
+        }
+
+        std::string typestr() const noexcept override { return "TanhOp"; }
     };
 
     struct AddOp final : public GradFn {
@@ -360,6 +413,8 @@ struct BroadcastOp : public GradFn {
 
             Tensor(std::initializer_list<size_t> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) {}
 
+            Tensor(std::vector<size_t> shape_, bool requires_grad_=false) : impl_(new TensorImpl(shape_, requires_grad_)) {}
+
             Tensor(const TensorImpl& impl) {
                 impl_ = std::make_shared<TensorImpl>(impl);
             }
@@ -385,11 +440,12 @@ struct BroadcastOp : public GradFn {
                 return *this;
             }
 
-        private:
 
             void set_grad(std::shared_ptr<GradFn> node) {
                 impl_->grad_fn = node;
             }
+
+        private:
 
             Tensor& inplace_add(const Tensor& b) {
                 for(size_t i = 0; i < shape()[0]; ++i) {
@@ -668,6 +724,32 @@ struct BroadcastOp : public GradFn {
                     std::multiplies<float>()
                 );
                 return c;
+            }
+
+            static Tensor sigmoid(const Tensor& input) {
+                Tensor output(input.shape());
+                for (size_t i = 0; i < input.size(); ++i) {
+                    output[i] = 1.0f / (1.0f + std::exp(-input[i]));
+                }
+
+                if (input.requires_grad()) {
+                    output.set_grad(std::make_shared<SigmoidOp>(input.impl_));
+                }
+
+                return output;
+            }
+
+            static Tensor tanh(const Tensor& input) {
+                Tensor output(input.shape());
+                for (size_t i = 0; i < input.size(); ++i) {
+                    output[i] = std::tanh(input[i]);
+                }
+
+                if (input.requires_grad()) {
+                    output.set_grad(std::make_shared<TanhOp>(input.impl_));
+                }
+
+                return output;
             }
 
             Tensor transpose() {
@@ -964,6 +1046,29 @@ struct BroadcastOp : public GradFn {
             return ss.str();
         }
     };
+
+
+    struct Sigmoid final : public Layer {
+        std::vector<Tensor *> parameters() override { return {}; }
+
+        void forward(const Tensor &input, Tensor &output) override {
+            output = Tensor::sigmoid(input);
+        }
+
+        std::string to_string() const override { return "Sigmoid()"; }
+    };
+
+
+    struct Tanh : Layer {
+        std::vector<Tensor *> parameters() override { return {}; }
+
+        void forward(const Tensor &input, Tensor &output) override {
+            output = Tensor::tanh(input);
+        }
+
+        std::string to_string() const override { return "Tanh()"; }
+    };
+
 
     struct ReLU : Layer {
         std::vector<Tensor *> parameters() override { return {}; }

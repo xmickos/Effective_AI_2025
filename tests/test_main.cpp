@@ -245,6 +245,44 @@ TEST(LayerTest, ReLU) {
     }
 }
 
+TEST(LayerTest, Sigmoid) {
+    Sigmoid sigmoid;
+    Tensor input({0.0f, 1.0f}, true);
+
+    Tensor output;
+    sigmoid.forward(input, output);
+
+    EXPECT_NEAR(output[0], 0.5f, 1e-5f);        // σ(0) = 0.5
+    EXPECT_NEAR(output[1], 0.73105858f, 1e-5f); // σ(1) ≈ 0.731
+
+    output.backward();
+
+    auto grad = input.get_grad();
+
+    EXPECT_NEAR(grad[0], 0.25f, 1e-5f);        // σ'(0) * 1 = 0.25
+    EXPECT_NEAR(grad[1], 0.19661193f, 1e-5f);  // σ'(1) * 1 ≈ 0.197
+}
+
+TEST(LayerTest, Tanh) {
+    Tanh tanh;
+    Tensor input({0.0f, 1.0f}, true);
+    input.reshape({2});
+
+    Tensor output;
+    tanh.forward(input, output);
+
+    EXPECT_NEAR(output[0], 0.0f, 1e-5f);        // tanh(0) = 0
+    EXPECT_NEAR(output[1], 0.76159416f, 1e-5f); // tanh(1) ≈ 0.761
+
+    output.backward();
+
+    auto grad = input.get_grad();
+
+    EXPECT_NEAR(grad[0], 1.0f, 1e-5f);        // tanh'(0) = 1
+    EXPECT_NEAR(grad[1], 0.41997434f, 1e-5f); // tanh'(1) ≈ 0.420
+}
+
+
 TEST(LayerTest, Linear) {
     Linear linear(3, 2);
 
