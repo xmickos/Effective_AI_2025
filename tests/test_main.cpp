@@ -233,12 +233,6 @@ TEST(LayerTest, ReLU) {
 
     auto grad_ = output.get_grad();
 
-    #if 0
-    for (size_t i = 0; i < input.size(); ++i) {  // ???
-        EXPECT_FLOAT_EQ(grad_[i], input[i] >= 0 ? 1.0f : 0.0f);
-    }
-    #endif
-
     auto input_grad = input.get_grad();
     for(size_t i = 0; i < input.size(); ++i) {
         EXPECT_FLOAT_EQ(input_grad[i], input[i] >= 0 ? 1.0f : 0.0f);
